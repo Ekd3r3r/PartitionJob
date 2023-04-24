@@ -1,0 +1,31 @@
+# permissions for end users to edit partitionjobs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: partitionjob-editor-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: partitionjob
+    app.kubernetes.io/part-of: partitionjob
+    app.kubernetes.io/managed-by: kustomize
+  name: partitionjob-editor-role
+rules:
+- apiGroups:
+  - webapp.my.domain
+  resources:
+  - partitionjobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - webapp.my.domain
+  resources:
+  - partitionjobs/status
+  verbs:
+  - get

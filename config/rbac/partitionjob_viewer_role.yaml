@@ -1,0 +1,27 @@
+# permissions for end users to view partitionjobs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: partitionjob-viewer-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: partitionjob
+    app.kubernetes.io/part-of: partitionjob
+    app.kubernetes.io/managed-by: kustomize
+  name: partitionjob-viewer-role
+rules:
+- apiGroups:
+  - webapp.my.domain
+  resources:
+  - partitionjobs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - webapp.my.domain
+  resources:
+  - partitionjobs/status
+  verbs:
+  - get
