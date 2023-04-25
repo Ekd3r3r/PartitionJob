@@ -48,10 +48,10 @@ type UpgradeStrategy string
 
 const (
     // UpgradeAll allows all replicas to be upgraded to the new version.
-    UpgradeAll UpgradeStartegy = "All"
+    UpgradeAll UpgradeStrategy = "All"
 
 	// UpgradePartitionOnly allows only the number of replicas specified in the partition to be upgraded to the new version.
-    UpgradePartitionOnly ConcurrencyPolicy = "PartitionOnly"
+    UpgradePartitionOnly UpgradeStrategy = "PartitionOnly"
 
 )
 
