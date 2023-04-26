@@ -45,12 +45,6 @@ type PartitionJobSpec struct {
 	// More info: https://kubernetes.io/docs/concepts/workloads/controllers/replicationcontroller#pod-template
 	// +optional
 	Template v1.PodTemplateSpec `json:"template,omitempty" protobuf:"bytes,3,opt,name=template"`
-
-	// Specifies the strategy used to upgrade the number of replicas in a Partition Job
-	// Valid values are:
-	// - "All" (default): allows all replicas to be upgraded to the new version;
-	// - "PartitionOnly": allows only the number of replicas specified in the partition to be upgraded to the new version;
-
 }
 
 // PartitionJobStatus defines the observed state of PartitionJob
@@ -62,7 +56,7 @@ type PartitionJobStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty" protobuf:"varint,1,opt,name=observedGeneration"`
 
 	// replicas is the number of Pods created by the PartitionJob controller.
-	Replicas int32 `json:"replicas" protobuf:"varint,2,opt,name=replicas"`
+	Replicas int32 `json:"replicas,omitempty" protobuf:"varint,2,opt,name=replicas"`
 
 	// currentReplicas is the number of Pods created by the PartitionJob controller from the PartitionJob version
 	// indicated by currentRevision.
