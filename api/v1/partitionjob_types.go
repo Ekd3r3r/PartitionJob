@@ -17,55 +17,68 @@ limitations under the License.
 package v1
 
 import (
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // PartitionJobSpec defines the desired state of PartitionJob
 type PartitionJobSpec struct {
 
-	// Replicas define the number of pod replicas to be created
-	Replicas *int64 `json:"replicas,omitempty"`
+	// replicas is the desired number of replicas of the given Template.
+	// These are replicas in the sense that they are instantiations of the
+	// same Template, but individual replicas also have a consistent identity.
+	// If unspecified, defaults to 1.
+	// +optional
+	Replicas *int32 `json:"replicas,omitempty" protobuf:"varint,1,opt,name=replicas"`
 
 	// Partitions define the number of pods being upgraded to the new version
-	Partitions *int64 `json:"partitions,omitempty"`
+	Partitions *int32 `json:"partitions,omitempty" protobuf:"varint,1,opt,name=partitions"`
 
-	
-    // Specifies the strategy used to upgrade the number of replicas in a Partition Job
-    // Valid values are:
-    // - "All" (default): allows all replicas to be upgraded to the new version;
-    // - "PartitionOnly": allows only the number of replicas specified in the partition to be upgraded to the new version;
+	// Selector is a label query over pods that should match the replica count.
+	// Label keys and values that must match in order to be controlled by this replica set.
+	// It must match the pod template's labels.
+	// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors
+	Selector *metav1.LabelSelector `json:"selector" protobuf:"bytes,2,opt,name=selector"`
 
-    // +optional
-    UpgradeStrategy UpgradeStrategy `json:"upgradeStrategy,omitempty"`
+	// Template is the object that describes the pod that will be created if
+	// insufficient replicas are detected.
+	// More info: https://kubernetes.io/docs/concepts/workloads/controllers/replicationcontroller#pod-template
+	// +optional
+	Template v1.PodTemplateSpec `json:"template,omitempty" protobuf:"bytes,3,opt,name=template"`
+
+	// Specifies the strategy used to upgrade the number of replicas in a Partition Job
+	// Valid values are:
+	// - "All" (default): allows all replicas to be upgraded to the new version;
+	// - "PartitionOnly": allows only the number of replicas specified in the partition to be upgraded to the new version;
+
 }
-
-// UpgradeStrategy describes how the job will be handled.
-// Only one of the following upgrade strategies may be specified.
-// If none of the following startegies is specified, the default one
-// is UpgradeAll.
-// +kubebuilder:validation:Enum=All;PartitionOnly
-type UpgradeStrategy string
-
-const (
-    // UpgradeAll allows all replicas to be upgraded to the new version.
-    UpgradeAll UpgradeStrategy = "All"
-
-	// UpgradePartitionOnly allows only the number of replicas specified in the partition to be upgraded to the new version.
-    UpgradePartitionOnly UpgradeStrategy = "PartitionOnly"
-
-)
 
 // PartitionJobStatus defines the observed state of PartitionJob
 type PartitionJobStatus struct {
 
-	
-	// ActiveReplicas define the number of pod replicas currently active
-	ActiveReplicas *int64 `json:"activeReplicas,omitempty"`
+	// observedGeneration is the most recent generation observed for this PartitionJob. It corresponds to the
+	// PartitionJob's generation, which is updated on mutation by the API Server.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty" protobuf:"varint,1,opt,name=observedGeneration"`
 
-	// ActivePartition define the number of pod replicas currently upgraded to the new version
-	ActivePartitions *int64 `json:"activePartitions,omitempty"`
+	// replicas is the number of Pods created by the PartitionJob controller.
+	Replicas int32 `json:"replicas" protobuf:"varint,2,opt,name=replicas"`
 
+	// currentReplicas is the number of Pods created by the PartitionJob controller from the PartitionJob version
+	// indicated by currentRevision.
+	CurrentReplicas int32 `json:"currentReplicas,omitempty" protobuf:"varint,4,opt,name=currentReplicas"`
 
+	// updatedReplicas is the number of Pods created by the PartitionJob controller from the PartitionJob version
+	// indicated by updateRevision.
+	UpdatedReplicas int32 `json:"updatedReplicas,omitempty" protobuf:"varint,5,opt,name=updatedReplicas"`
+
+	// currentRevision, if not empty, indicates the version of the PartitionJob used to generate Pods in the
+	// sequence [0,currentReplicas).
+	CurrentRevision string `json:"currentRevision,omitempty" protobuf:"bytes,6,opt,name=currentRevision"`
+
+	// updateRevision, if not empty, indicates the version of the PartitionJob used to generate Pods in the sequence
+	// [replicas-updatedReplicas,replicas)
+	UpdateRevision string `json:"updateRevision,omitempty" protobuf:"bytes,7,opt,name=updateRevision"`
 }
 
 //+kubebuilder:object:root=true
