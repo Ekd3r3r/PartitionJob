@@ -47,9 +47,18 @@ type PartitionJobReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.14.1/pkg/reconcile
 func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	l := log.FromContext(ctx)
 
 	// TODO(user): your logic here
+	partition := &webappv1.PartitionJob{}
+	err := r.Get(ctx, req.NamespacedName, partition)
+
+	if err != nil {
+		l.Error(err, "unable to fetch partition")
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	l.Info("Reconciling Partition", "Name", partition.Name, "Namespace", partition.Namespace)
 
 	return ctrl.Result{}, nil
 }
