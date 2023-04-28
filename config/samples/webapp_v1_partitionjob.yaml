@@ -9,6 +9,7 @@ metadata:
     app.kubernetes.io/created-by: partitionjob
   name: partitionjob-sample
 spec:
+  replicas: 6
   partitions: 1
   selector:
     matchLabels:

@@ -18,23 +18,24 @@ package controllers
 
 import (
 	"context"
-
-	"k8s.io/apimachinery/pkg/runtime"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/source"
+	"reflect"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	webappv1 "my.domain/partitionJob/api/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // PartitionJobReconciler reconciles a PartitionJob object
 type PartitionJobReconciler struct {
 	client.Client
-	Scheme       *runtime.Scheme
-	partitionJob *webappv1.PartitionJob
+	Scheme *runtime.Scheme
 }
 
 //+kubebuilder:rbac:groups=webapp.my.domain,resources=partitionjobs,verbs=get;list;watch;create;update;patch;delete
@@ -53,70 +54,118 @@ type PartitionJobReconciler struct {
 func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 
-	partitionJob, err := r.GetPartitionJob(ctx, req)
-
+	instance := &webappv1.PartitionJob{}
+	err := r.Get(context.TODO(), req.NamespacedName, instance)
 	if err != nil {
-		pod, err := r.GetPod(ctx, req)
-
-		if pod.Labels["app"] == "for-partition" {
-			l.Info("Reconciling Pod", "Pod", pod)
-			//for number of partitions defined in our partition job
-			//r.update pod using pod spec in our partition job template
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
 		}
+		return ctrl.Result{}, err
+	}
 
-		if err != nil {
-			return ctrl.Result{}, client.IgnoreNotFound(err)
+	l.Info("Enter Reconcile", "Partition Job", instance)
+
+	instance.Status.Replicas = instance.Spec.Replicas //desired replicas
+
+	partitionJob := instance
+	podList := &corev1.PodList{}
+	labelsToMatch := map[string]string{
+		"app": partitionJob.Name,
+	}
+	labelSelector := labels.SelectorFromSet(labelsToMatch)
+
+	listOptions := &client.ListOptions{Namespace: partitionJob.Namespace, LabelSelector: labelSelector}
+	if err = r.List(context.TODO(), podList, listOptions); err != nil {
+		return ctrl.Result{}, err
+		//TODO:: take care of scenario where desired replica count is >0 but observed is 0
+	}
+
+	// Count the pods that are pending or running as available
+	var availableReplicas []corev1.Pod
+	for _, pod := range podList.Items {
+		l.Info("pod list items", "pod name", pod.Name)
+
+		if pod.ObjectMeta.DeletionTimestamp != nil {
+			continue
 		}
-	} else {
-		l.Info("Reconciling partition", "partition job info", partitionJob)
-		r.partitionJob = partitionJob
+		if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
+			availableReplicas = append(availableReplicas, pod)
+		}
+	}
+	numAvailableReplicas := int32(len(availableReplicas))
 
-		podList := &corev1.PodList{}
-		pods := []corev1.Pod{}
+	observedStatus := webappv1.PartitionJobStatus{
+		Replicas: numAvailableReplicas, //observed replicas
+	}
 
-		if err := r.List(ctx, podList); err != nil {
-			l.Error(err, "no pods found")
-		} else {
-			for _, pod := range podList.Items {
-				if pod.Labels["app"] == "for-partition" {
-					pods = append(pods, pod)
-				}
+	if !reflect.DeepEqual(partitionJob.Status, observedStatus) {
+		partitionJob.Status = observedStatus
+		if err := r.Status().Update(context.TODO(), partitionJob); err != nil {
+			l.Error(err, "Failed to update PartitionJob status")
+			return ctrl.Result{}, err
+		}
+	}
+
+	if numAvailableReplicas > partitionJob.Spec.Replicas {
+		l.Info("Scaling down pods", "Currently available", numAvailableReplicas, "Required replicas", partitionJob.Spec.Replicas)
+		diff := numAvailableReplicas - partitionJob.Spec.Replicas
+		dpods := availableReplicas[:diff]
+		for _, dpod := range dpods {
+			err = r.Delete(context.TODO(), &dpod)
+			if err != nil {
+				l.Error(err, "Failed to delete pod", "pod.name", dpod.Name)
+				return ctrl.Result{}, err
 			}
-
-			replicas := int32(len(pods))
-			r.partitionJob.Spec.Replicas = &replicas
-			l.Info("Partition job updated", "Spec", r.partitionJob.Spec)
 		}
+		return ctrl.Result{Requeue: true}, nil
+	}
 
+	if numAvailableReplicas < partitionJob.Spec.Replicas {
+		l.Info("Scaling up pods", "Currently available", numAvailableReplicas, "Required replicas", partitionJob.Spec.Replicas)
+		// Define a new Pod object
+		pod := newPodForCR(partitionJob)
+		// Set partitionJob instance as the owner and controller
+		if err := controllerutil.SetControllerReference(partitionJob, pod, r.Scheme); err != nil {
+			return ctrl.Result{}, err
+		}
+		err = r.Create(context.TODO(), pod)
+		if err != nil {
+			l.Error(err, "Failed to create pod", "pod.name", pod.Name)
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func (r *PartitionJobReconciler) GetPartitionJob(ctx context.Context, req ctrl.Request) (*webappv1.PartitionJob, error) {
-	partition := &webappv1.PartitionJob{} //try to parse req into partitionJob resource
-
-	if err := r.Get(ctx, req.NamespacedName, partition); err != nil {
-		return nil, err
+// newPodForCR returns a busybox pod with the same name/namespace as the cr
+func newPodForCR(cr *webappv1.PartitionJob) *corev1.Pod {
+	labels := map[string]string{
+		"app": cr.Name,
 	}
-
-	return partition, nil
-}
-
-func (r *PartitionJobReconciler) GetPod(ctx context.Context, req ctrl.Request) (*corev1.Pod, error) {
-	pod := &corev1.Pod{} //try to parse req into pod resource
-
-	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
-		return nil, err
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: cr.Name + "-pod",
+			Namespace:    cr.Namespace,
+			Labels:       labels,
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:    "busybox",
+					Image:   "busybox",
+					Command: []string{"sleep", "3600"},
+				},
+			},
+		},
 	}
-
-	return pod, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PartitionJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&webappv1.PartitionJob{}).
-		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForObject{}).
+		Owns(&corev1.Pod{}).
 		Complete(r)
 }
