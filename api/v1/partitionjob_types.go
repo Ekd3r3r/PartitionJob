@@ -29,7 +29,7 @@ type PartitionJobSpec struct {
 	// same Template, but individual replicas also have a consistent identity.
 	// If unspecified, defaults to 1.
 	// +optional
-	Replicas *int32 `json:"replicas,omitempty" protobuf:"varint,1,opt,name=replicas"`
+	Replicas int32 `json:"replicas,omitempty" protobuf:"varint,1,opt,name=replicas"`
 
 	// Partitions define the number of pods being upgraded to the new version
 	Partitions *int32 `json:"partitions,omitempty" protobuf:"varint,1,opt,name=partitions"`
