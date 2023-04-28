@@ -9,4 +9,12 @@ metadata:
     app.kubernetes.io/created-by: partitionjob
   name: partitionjob-sample
 spec:
-  # TODO(user): Add fields here
+  partitions: 1
+  selector:
+    matchLabels:
+      app: for-partition
+  template:
+    spec:
+      containers:
+        - name: nginx-container
+          image: nginx-alpine

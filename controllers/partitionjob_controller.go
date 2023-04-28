@@ -22,15 +22,19 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	corev1 "k8s.io/api/core/v1"
 	webappv1 "my.domain/partitionJob/api/v1"
 )
 
 // PartitionJobReconciler reconciles a PartitionJob object
 type PartitionJobReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme       *runtime.Scheme
+	partitionJob *webappv1.PartitionJob
 }
 
 //+kubebuilder:rbac:groups=webapp.my.domain,resources=partitionjobs,verbs=get;list;watch;create;update;patch;delete
@@ -49,23 +53,70 @@ type PartitionJobReconciler struct {
 func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 
-	// TODO(user): your logic here
-	partition := &webappv1.PartitionJob{}
-	err := r.Get(ctx, req.NamespacedName, partition)
+	partitionJob, err := r.GetPartitionJob(ctx, req)
 
 	if err != nil {
-		l.Error(err, "unable to fetch partition")
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		pod, err := r.GetPod(ctx, req)
+
+		if pod.Labels["app"] == "for-partition" {
+			l.Info("Reconciling Pod", "Pod", pod)
+			//for number of partitions defined in our partition job
+			//r.update pod using pod spec in our partition job template
+		}
+
+		if err != nil {
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+	} else {
+		l.Info("Reconciling partition", "partition job info", partitionJob)
+		r.partitionJob = partitionJob
+
+		podList := &corev1.PodList{}
+		pods := []corev1.Pod{}
+
+		if err := r.List(ctx, podList); err != nil {
+			l.Error(err, "no pods found")
+		} else {
+			for _, pod := range podList.Items {
+				if pod.Labels["app"] == "for-partition" {
+					pods = append(pods, pod)
+				}
+			}
+
+			replicas := int32(len(pods))
+			r.partitionJob.Spec.Replicas = &replicas
+			l.Info("Partition job updated", "Spec", r.partitionJob.Spec)
+		}
+
 	}
 
-	l.Info("Reconciling Partition", "Name", partition.Name, "Namespace", partition.Namespace)
-
 	return ctrl.Result{}, nil
+}
+
+func (r *PartitionJobReconciler) GetPartitionJob(ctx context.Context, req ctrl.Request) (*webappv1.PartitionJob, error) {
+	partition := &webappv1.PartitionJob{} //try to parse req into partitionJob resource
+
+	if err := r.Get(ctx, req.NamespacedName, partition); err != nil {
+		return nil, err
+	}
+
+	return partition, nil
+}
+
+func (r *PartitionJobReconciler) GetPod(ctx context.Context, req ctrl.Request) (*corev1.Pod, error) {
+	pod := &corev1.Pod{} //try to parse req into pod resource
+
+	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
+		return nil, err
+	}
+
+	return pod, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PartitionJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&webappv1.PartitionJob{}).
+		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }
