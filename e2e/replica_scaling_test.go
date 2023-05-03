@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -9,13 +10,13 @@ import (
 func TestPartitionJobReplicaScaling(t *testing.T) {
 
 	// delete the namespace if it already exists
-	cmd := kubectl("delete", "namespace", "partionjob-test", "--ignore-not-found")
+	cmd := kubectl("delete", "namespace", "partitionjob-test", "--ignore-not-found")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatal(string(out))
 	}
 
 	// create namespace
-	cmd = kubectl("apply", "-f", "./e2e/fixtures/namespace.yml")
+	cmd = kubectl("apply", "-f", "fixtures/namespace.yaml")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatal(string(out))
 	}
@@ -26,15 +27,15 @@ func TestPartitionJobReplicaScaling(t *testing.T) {
 	}{
 		{
 			description:     "Deploying PartitionJob",
-			fixtureFilePath: "./e2e/fixtures/partitionjob_deploy.yml",
+			fixtureFilePath: "fixtures/partitionjob_deploy.yaml",
 		},
 		{
 			description:     "Scaling up PartitionJob",
-			fixtureFilePath: "./e2e/fixtures/partitionjob_scale_up.yml",
+			fixtureFilePath: "fixtures/partitionjob_scale_up.yaml",
 		},
 		{
 			description:     "Scaling down PartitionJob",
-			fixtureFilePath: "./e2e/fixtures/partitionjob_scale_down.yml",
+			fixtureFilePath: "fixtures/partitionjob_scale_down.yaml",
 		},
 	}
 
@@ -53,13 +54,12 @@ func TestPartitionJobReplicaScaling(t *testing.T) {
 			timeout = 300 * time.Second
 		}
 
-		cmd = kubectl("wait", "--for=condition=ready", "--timeout="+timeout.String(), "pod", "-selector=app=partitionjob-sample", "--namespace=partitionjob-test")
+		cmd = kubectl("wait", "--for=condition=ready", "--timeout="+timeout.String(), "pods", "--selector=app=partitionjob-sample", "--namespace=partitionjob-test")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatal(string(out))
 		}
-		t.Log("Success creating PartitionJob")
 
-		cmd = kubectl("get", "pods", "-selector=app=partitionjob-sample", "--namespace=partitionjob-test", "--no-headers", "| wc -l")
+		cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.replicas}}")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatal(string(out))
@@ -70,16 +70,20 @@ func TestPartitionJobReplicaScaling(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o 'go-template={{.spec.replicas}}'")
+		t.Log("Expected replicas: ", expectedReplicas)
+
+		//wait for the pods to be scaled
+		time.Sleep(45 * time.Second)
+
+		cmd = kubectl("get", "pods", "--field-selector=status.phase=Running", "--namespace=partitionjob-test", "--selector=app=partitionjob-sample", "--no-headers", "-o", "name")
 		out, err = cmd.CombinedOutput()
 		if err != nil {
 			t.Fatal(string(out))
 		}
 
-		actualReplicas, err := strconv.Atoi(string(out))
-		if err != nil {
-			t.Fatal(err)
-		}
+		actualReplicas := len(strings.Fields(string(out)))
+
+		t.Log("Actual replicas: ", actualReplicas)
 
 		if actualReplicas != expectedReplicas {
 			t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
