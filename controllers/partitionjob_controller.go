@@ -65,8 +65,6 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	l.Info("Enter Reconcile", "Partition Job", instance)
 
-	instance.Status.Replicas = instance.Spec.Replicas //desired replicas
-
 	partitionJob := instance
 	podList := &corev1.PodList{}
 	labelsToMatch := map[string]string{
@@ -77,14 +75,11 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	listOptions := &client.ListOptions{Namespace: partitionJob.Namespace, LabelSelector: labelSelector}
 	if err = r.List(context.TODO(), podList, listOptions); err != nil {
 		return ctrl.Result{}, err
-		//TODO:: take care of scenario where desired replica count is >0 but observed is 0
 	}
 
 	// Count the pods that are pending or running as available
 	var availableReplicas []corev1.Pod
 	for _, pod := range podList.Items {
-		l.Info("pod list items", "pod name", pod.Name)
-
 		if pod.ObjectMeta.DeletionTimestamp != nil {
 			continue
 		}
@@ -95,7 +90,7 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	numAvailableReplicas := int32(len(availableReplicas))
 
 	observedStatus := webappv1.PartitionJobStatus{
-		Replicas: numAvailableReplicas, //observed replicas
+		CurrentReplicas: numAvailableReplicas, //observed replicas
 	}
 
 	if !reflect.DeepEqual(partitionJob.Status, observedStatus) {
