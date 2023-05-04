@@ -63,13 +63,9 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	l.Info("Enter Reconcile", "Partition Job", instance)
-
 	partitionJob := instance
 	podList := &corev1.PodList{}
-	labelsToMatch := map[string]string{
-		"app": partitionJob.Name,
-	}
+	labelsToMatch := partitionJob.Spec.Selector.MatchLabels
 	labelSelector := labels.SelectorFromSet(labelsToMatch)
 
 	listOptions := &client.ListOptions{Namespace: partitionJob.Namespace, LabelSelector: labelSelector}
@@ -90,7 +86,8 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	numAvailableReplicas := int32(len(availableReplicas))
 
 	observedStatus := webappv1.PartitionJobStatus{
-		CurrentReplicas: numAvailableReplicas, //observed replicas
+		Replicas:        partitionJob.Spec.Replicas, //desired replicas
+		CurrentReplicas: numAvailableReplicas,       //observed replicas
 	}
 
 	if !reflect.DeepEqual(partitionJob.Status, observedStatus) {
@@ -118,7 +115,7 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if numAvailableReplicas < partitionJob.Spec.Replicas {
 		l.Info("Scaling up pods", "Currently available", numAvailableReplicas, "Required replicas", partitionJob.Spec.Replicas)
 		// Define a new Pod object
-		pod := newPodForCR(partitionJob)
+		pod := createNewPod(partitionJob)
 		// Set partitionJob instance as the owner and controller
 		if err := controllerutil.SetControllerReference(partitionJob, pod, r.Scheme); err != nil {
 			return ctrl.Result{}, err
@@ -134,26 +131,16 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return ctrl.Result{}, nil
 }
 
-// newPodForCR returns a busybox pod with the same name/namespace as the cr
-func newPodForCR(cr *webappv1.PartitionJob) *corev1.Pod {
-	labels := map[string]string{
-		"app": cr.Name,
-	}
+// returns a pod with the same name/namespace as the CR, using the pod spec described in the CR
+func createNewPod(cr *webappv1.PartitionJob) *corev1.Pod {
+	labels := cr.Spec.Selector.MatchLabels
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: cr.Name + "-pod",
 			Namespace:    cr.Namespace,
 			Labels:       labels,
 		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name:    "busybox",
-					Image:   "busybox",
-					Command: []string{"sleep", "3600"},
-				},
-			},
-		},
+		Spec: cr.Spec.Template.Spec,
 	}
 }
 
