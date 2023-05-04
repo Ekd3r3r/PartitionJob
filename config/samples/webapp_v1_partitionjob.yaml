@@ -9,13 +9,13 @@ metadata:
     app.kubernetes.io/created-by: partitionjob
   name: partitionjob-sample
 spec:
-  replicas: 6
+  replicas: 5
   partitions: 1
   selector:
     matchLabels:
-      app: for-partition
+      app: partitionjob-sample
   template:
     spec:
       containers:
         - name: nginx-container
-          image: nginx-alpine
+          image: nginx:stable

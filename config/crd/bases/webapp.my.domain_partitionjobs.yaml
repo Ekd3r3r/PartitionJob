@@ -7493,15 +7493,15 @@ spec:
                   which is updated on mutation by the API Server.
                 format: int64
                 type: integer
+              replicas:
+                description: replicas is the number of desired Pods as per PartitionJob
+                  controller spec
+                format: int32
+                type: integer
               updateRevision:
                 description: updateRevision, if not empty, indicates the version of
                   the PartitionJob used to generate Pods in the sequence [replicas-updatedReplicas,replicas)
                 type: string
-              updatedReplicas:
-                description: updatedReplicas is the number of Pods updated by the
-                  PartitionJob controller
-                format: int32
-                type: integer
             type: object
         type: object
     served: true
