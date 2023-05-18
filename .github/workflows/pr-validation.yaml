@@ -32,19 +32,9 @@ jobs:
         sudo apt-get install -y kubelet=1.26.1-00 kubeadm=1.26.1-00 kubectl=1.26.1-00
         sudo apt-mark hold kubelet kubeadm
 
-    - name: Wait for kubelet to be running or healthy
-      run: |
-        while true; do
-          status=$(sudo systemctl is-active kubelet)
-          if [ "$status" == "active" ]; then
-            break
-          fi
-          sleep 5
-        done
-
     - name: Initialize Kubernetes cluster
       run: |
-        sudo kubeadm init --kubernetes-version=v1.26.1 --pod-network-cidr=10.244.0.0/16
+        sudo kubeadm init --kubernetes-version=v1.26.1 --pod-network-cidr=10.244.0.0/16  --timeoutForControlPlane=10m0s
 
     - name: Configure kubectl
       run: |
