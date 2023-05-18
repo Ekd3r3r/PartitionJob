@@ -101,8 +101,10 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	numAvailableReplicas := int32(len(availableReplicas))
 
 	observedStatus := webappv1.PartitionJobStatus{
-		Replicas:        partitionJob.Spec.Replicas, //desired replicas
-		CurrentReplicas: numAvailableReplicas,       //observed replicas
+		Replicas:          partitionJob.Spec.Replicas, //desired replicas
+		AvailableReplicas: numAvailableReplicas,       //observed replicas
+		CurrentRevision:   currentRevision.Name,       //current revision
+		UpdateRevision:    updatedRevision.Name,       //update revision
 	}
 
 	if !reflect.DeepEqual(partitionJob.Status, observedStatus) {
@@ -114,6 +116,7 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if numAvailableReplicas > partitionJob.Spec.Replicas {
+
 		l.Info("Scaling down pods", "Currently available", numAvailableReplicas, "Required replicas", partitionJob.Spec.Replicas)
 		diff := numAvailableReplicas - partitionJob.Spec.Replicas
 		dpods := availableReplicas[:diff]
@@ -135,6 +138,9 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if err := controllerutil.SetControllerReference(partitionJob, pod, r.Scheme); err != nil {
 			return ctrl.Result{}, err
 		}
+
+		setPodRevision(pod, currentRevision.Name)
+
 		err = r.Create(context.TODO(), pod)
 		if err != nil {
 			l.Error(err, "Failed to create pod", "pod.name", pod.Name)
@@ -143,7 +149,70 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
+	replicaCount := partitionJob.Spec.Replicas
+	oldRevisionPods := make([]corev1.Pod, replicaCount)
+	newRevisionPods := make([]corev1.Pod, replicaCount)
+
+	for _, pod := range availableReplicas {
+
+		podRevision := getPodRevision(&pod)
+
+		if podRevision == currentRevision.Name {
+			oldRevisionPods = append(oldRevisionPods, pod)
+			partitionJob.Status.CurrentReplicas++
+		}
+		if podRevision == updatedRevision.Name {
+			newRevisionPods = append(newRevisionPods, pod)
+			partitionJob.Status.UpdatedReplicas++
+		}
+	}
+
+	if partitionJob.Status.UpdatedReplicas > *partitionJob.Spec.Partitions {
+		l.Info("Scaling down new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
+		diff := partitionJob.Status.UpdatedReplicas - *partitionJob.Spec.Partitions
+		dpods := newRevisionPods[:diff]
+		for _, dpod := range dpods {
+			err = r.Delete(context.TODO(), &dpod)
+			if err != nil {
+				l.Error(err, "Failed to delete pod", "pod.name", dpod.Name)
+				return ctrl.Result{}, err
+			}
+		}
+
+		return ctrl.Result{}, nil
+
+	} else if partitionJob.Status.UpdatedReplicas < *partitionJob.Spec.Partitions {
+		l.Info("Scaling up new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
+		diff := *partitionJob.Spec.Partitions - partitionJob.Status.UpdatedReplicas
+		dpods := oldRevisionPods[:diff]
+		for _, dpod := range dpods {
+			err = r.Delete(context.TODO(), &dpod)
+			if err != nil {
+				l.Error(err, "Failed to delete pod", "pod.name", dpod.Name)
+				return ctrl.Result{}, err
+			}
+
+			// Define a new Pod object
+			pod := CreateNewPod(partitionJob)
+			// Set partitionJob instance as the owner and controller
+			if err := controllerutil.SetControllerReference(partitionJob, pod, r.Scheme); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			setPodRevision(pod, updatedRevision.Name)
+
+			err = r.Create(context.TODO(), pod)
+			if err != nil {
+				l.Error(err, "Failed to create pod", "pod.name", pod.Name)
+				return ctrl.Result{}, err
+			}
+
+		}
+		return ctrl.Result{}, nil
+	}
+
 	return ctrl.Result{}, nil
+
 }
 
 // returns a pod with the same name/namespace as the CR, using the pod spec described in the CR
@@ -253,4 +322,22 @@ func (r *PartitionJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&webappv1.PartitionJob{}).
 		Owns(&corev1.Pod{}).
 		Complete(r)
+}
+
+// getPodRevision gets the revision of Pod by inspecting the PartitionJobRevisionLabel. If pod has no revision the empty
+// string is returned.
+func getPodRevision(pod *corev1.Pod) string {
+	if pod.Labels == nil {
+		return ""
+	}
+
+	return pod.Labels["PartitionJobRevisionLabel"]
+}
+
+// setPodRevision sets the revision of Pod to revision by adding the StatefulSetRevisionLabel
+func setPodRevision(pod *corev1.Pod, revision string) {
+	if pod.Labels == nil {
+		pod.Labels = make(map[string]string)
+	}
+	pod.Labels["PartitionJobRevisionLabel"] = revision
 }
