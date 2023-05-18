@@ -7478,9 +7478,15 @@ spec:
           status:
             description: PartitionJobStatus defines the observed state of PartitionJob
             properties:
+              availableReplicas:
+                description: availableReplicas is the number of Pods pending or running
+                  as available
+                format: int32
+                type: integer
               currentReplicas:
                 description: currentReplicas is the number of Pods currently observed
-                  by the PartitionJob controller
+                  by the PartitionJob controller from the PartitionJob version indicated
+                  by currentRevision
                 format: int32
                 type: integer
               currentRevision:
@@ -7502,6 +7508,12 @@ spec:
                 description: updateRevision, if not empty, indicates the version of
                   the PartitionJob used to generate Pods in the sequence [replicas-updatedReplicas,replicas)
                 type: string
+              updatedReplicas:
+                description: updatedReplicas is the number of Pods currently observed
+                  by the PartitionJob controller from the PartitionJob version indicated
+                  by updateRevision
+                format: int32
+                type: integer
             type: object
         type: object
     served: true
