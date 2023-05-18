@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  prvalidation:
     runs-on: ubuntu-latest
 
     steps:
@@ -34,7 +34,7 @@ jobs:
 
     - name: Initialize Kubernetes cluster
       run: |
-        sudo kubeadm init --kubernetes-version=v1.26.1 --ignore-preflight-errors=FileContent--proc-sys-net-bridge-bridge-nf-call-iptables --pod-network-cidr=10.244.0.0/16
+        sudo kubeadm init --kubernetes-version=v1.26.1 --pod-network-cidr=10.244.0.0/16 --node-status-update-frequency=300s
 
     - name: Configure kubectl
       run: |
