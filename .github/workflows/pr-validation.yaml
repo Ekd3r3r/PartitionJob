@@ -20,7 +20,7 @@ jobs:
 
    - name: Install kubectl
       run: |
-        curl -LO "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        curl -LO "https://dl.k8s.io/release/v1.26.1/bin/linux/amd64/kubectl"
         sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
 
     - name: Install kubeadm and kubelet
@@ -34,7 +34,7 @@ jobs:
 
     - name: Initialize Kubernetes cluster
       run: |
-        sudo kubeadm init --pod-network-cidr=10.244.0.0/16
+        sudo kubeadm init --kubernetes-version=v1.26.1 --pod-network-cidr=10.244.0.0/16
 
     - name: Configure kubectl
       run: |
