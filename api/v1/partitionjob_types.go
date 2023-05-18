@@ -58,8 +58,14 @@ type PartitionJobStatus struct {
 	// replicas is the number of desired Pods as per PartitionJob controller spec
 	Replicas int32 `json:"replicas,omitempty" protobuf:"varint,4,opt,name=replicas"`
 
-	// currentReplicas is the number of Pods currently observed by the PartitionJob controller
+	// availableReplicas is the number of Pods pending or running as available
+	AvailableReplicas int32 `json:"availableReplicas,omitempty" protobuf:"varint,4,opt,name=availableReplicas"`
+
+	// currentReplicas is the number of Pods currently observed by the PartitionJob controller from the PartitionJob version indicated by currentRevision
 	CurrentReplicas int32 `json:"currentReplicas,omitempty" protobuf:"varint,4,opt,name=currentReplicas"`
+
+	// updatedReplicas is the number of Pods currently observed by the PartitionJob controller from the PartitionJob version indicated by updateRevision
+	UpdatedReplicas int32 `json:"updatedReplicas,omitempty" protobuf:"varint,4,opt,name=updatedReplicas"`
 
 	// currentRevision, if not empty, indicates the version of the PartitionJob used to generate Pods in the
 	// sequence [0,currentReplicas).
