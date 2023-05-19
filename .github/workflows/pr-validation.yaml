@@ -1,49 +1,47 @@
-name: Go E2E Tests with Kubernetes
+name: Build and deploy an app to AKS
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    branches: [$default-branch]
+  workflow_dispatch:
+
+env:
+  RESOURCE_GROUP: "myResourceGroup"
+  CLUSTER_NAME: "myAKSCluster"
 
 jobs:
-  prvalidation:
+  PRvalidation:
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v2
+      # Checks out the repository this file is in
+      - uses: actions/checkout@v3
 
-    - name: Set up Go
-      uses: actions/setup-go@v2
-      with:
+      # Logs in with your Azure credentials
+      - name: Azure login
+        id: login
+        uses: azure/login@v1.4.3
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        id: set-context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: '${{ env.RESOURCE_GROUP }}' 
+          cluster-name: '${{ env.CLUSTER_NAME }}'
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
         go-version: '1.20'
 
-    - name: Install kubectl
-      run: |
-        curl -LO "https://dl.k8s.io/release/v1.26.1/bin/linux/amd64/kubectl"
-        sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+      - name: Setup kubectl
+        id: install-kubectl
+        uses: azure/setup-kubectl@v3
 
-    - name: Install kubeadm and kubelet
-      run: |
-        sudo apt-get update && sudo apt-get install -y apt-transport-https curl
-        curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-        echo "deb https://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
-        sudo apt-get update
-        sudo apt-get install -y kubelet=1.26.1-00 kubeadm=1.26.1-00 kubectl=1.26.1-00
-        sudo apt-mark hold kubelet kubeadm
-
-    - name: Initialize Kubernetes cluster
-      run: |
-        sudo kubeadm init --kubernetes-version=v1.26.1 --pod-network-cidr=10.244.0.0/16  --timeoutForControlPlane=10m0s
-
-    - name: Configure kubectl
-      run: |
-        mkdir -p $HOME/.kube
-        sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-        sudo chown $(id -u):$(id -g) $HOME/.kube/config
-
-
-    - name: Build controller
-      run: |
-        make manifests
-        make install
+      - name: Build
+        run: |
+          make install
