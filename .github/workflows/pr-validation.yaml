@@ -1,4 +1,4 @@
-name: Build and deploy an app to AKS
+name: PR validation for PartitionJob
 
 on:
   push:
@@ -6,10 +6,6 @@ on:
   pull_request:
     branches: main
   workflow_dispatch:
-
-# env:
-#   RESOURCE_GROUP: "myResourceGroup"
-#   CLUSTER_NAME: "myAKSCluster"
 
 jobs:
   PRvalidation:
@@ -21,20 +17,6 @@ jobs:
       # Checks out the repository this file is in
       - uses: actions/checkout@v3
 
-      # # Logs in with your Azure credentials
-      # - name: Azure login
-      #   id: login
-      #   uses: azure/login@v1.4.3
-      #   with:
-      #     creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      # - name: Set AKS context
-      #   id: set-context
-      #   uses: azure/aks-set-context@v3
-      #   with:
-      #     resource-group: '${{ env.RESOURCE_GROUP }}' 
-      #     cluster-name: '${{ env.CLUSTER_NAME }}'
-
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
@@ -43,6 +25,11 @@ jobs:
       - name: Build
         run: |
           go build
+          if [[ $? -eq 0 ]]; then
+            echo "Build succeeded"
+          else
+            echo "Build failed"
+          fi
 
       - name: Setup kubectl
         id: install-kubectl
@@ -52,6 +39,6 @@ jobs:
         uses: helm/kind-action@v1.4.0
 
       - name: Install PartitionJob CRD in cluster
-          run: |
-            go build
+        run: |
+          make install
 
