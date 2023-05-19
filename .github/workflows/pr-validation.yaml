@@ -7,9 +7,9 @@ on:
     branches: main
   workflow_dispatch:
 
-env:
-  RESOURCE_GROUP: "myResourceGroup"
-  CLUSTER_NAME: "myAKSCluster"
+# env:
+#   RESOURCE_GROUP: "myResourceGroup"
+#   CLUSTER_NAME: "myAKSCluster"
 
 jobs:
   PRvalidation:
@@ -21,29 +21,37 @@ jobs:
       # Checks out the repository this file is in
       - uses: actions/checkout@v3
 
-      # Logs in with your Azure credentials
-      - name: Azure login
-        id: login
-        uses: azure/login@v1.4.3
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      # # Logs in with your Azure credentials
+      # - name: Azure login
+      #   id: login
+      #   uses: azure/login@v1.4.3
+      #   with:
+      #     creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set AKS context
-        id: set-context
-        uses: azure/aks-set-context@v3
-        with:
-          resource-group: '${{ env.RESOURCE_GROUP }}' 
-          cluster-name: '${{ env.CLUSTER_NAME }}'
+      # - name: Set AKS context
+      #   id: set-context
+      #   uses: azure/aks-set-context@v3
+      #   with:
+      #     resource-group: '${{ env.RESOURCE_GROUP }}' 
+      #     cluster-name: '${{ env.CLUSTER_NAME }}'
 
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
           go-version: '1.20'
 
+      - name: Build
+        run: |
+          go build
+
       - name: Setup kubectl
         id: install-kubectl
         uses: azure/setup-kubectl@v3
 
-      - name: Build
-        run: |
-          make install
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.4.0
+
+      - name: Install PartitionJob CRD in cluster
+          run: |
+            go build
+
