@@ -17,8 +17,11 @@ limitations under the License.
 package controllers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"reflect"
+	"time"
 
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -26,6 +29,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	informers "k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/pkg/controller/history"
 	webappv1 "my.domain/partitionJob/api/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -57,8 +62,23 @@ type PartitionJobReconciler struct {
 func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 
+	config, err := ctrl.GetConfig()
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if r.controllerHistory == nil {
+		informerFactory := informers.NewSharedInformerFactory(clientset, 2*time.Minute)
+		r.controllerHistory = history.NewHistory(clientset, informerFactory.Apps().V1().ControllerRevisions().Lister())
+	}
+
 	instance := &webappv1.PartitionJob{}
-	err := r.Get(context.TODO(), req.NamespacedName, instance)
+	err = r.Get(context.TODO(), req.NamespacedName, instance)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -76,12 +96,14 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	history.SortControllerRevisions(allRevisions)
+
 	currentRevision, updatedRevision, collisonCount, err := r.GetRevision(partitionJob, allRevisions)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	l.Info("Revision Info", currentRevision, updatedRevision, collisonCount)
+	l.Info("Revision Info", "current revision:", currentRevision, "updated revision:", updatedRevision, "collision count:", collisonCount)
 
 	listOptions := &client.ListOptions{Namespace: partitionJob.Namespace, LabelSelector: labelSelector}
 	if err = r.List(context.TODO(), podList, listOptions); err != nil {
@@ -240,7 +262,7 @@ func (r *PartitionJobReconciler) ListRevisions(partitionJob *webappv1.PartitionJ
 
 // creates a new controller revision
 func CreateNewRevision(partitionJob *webappv1.PartitionJob, revision int64, collisionCount *int32) (*apps.ControllerRevision, error) {
-	cr, err := history.NewControllerRevision(partitionJob, partitionJob.GroupVersionKind(), partitionJob.Spec.Template.Labels, runtime.RawExtension{}, revision, collisionCount)
+	cr, err := history.NewControllerRevision(partitionJob, partitionJob.GroupVersionKind(), partitionJob.Spec.Selector.MatchLabels, rawTemplate(&partitionJob.Spec.Template), revision, collisionCount)
 
 	if err != nil {
 		return nil, err
@@ -274,8 +296,7 @@ func (r *PartitionJobReconciler) GetRevision(partitionJob *webappv1.PartitionJob
 	//revisionCount := len(revisions)
 	history.SortControllerRevisions(revisions)
 
-	var collisionCount int32
-	collisionCount = 0 //TODO
+	var collisionCount int32 = 0 //TODO
 
 	updatedRevision, err := CreateNewRevision(partitionJob, GetNextRevision(revisions), &collisionCount)
 	if err != nil {
@@ -340,4 +361,13 @@ func setPodRevision(pod *corev1.Pod, revision string) {
 		pod.Labels = make(map[string]string)
 	}
 	pod.Labels["PartitionJobRevisionLabel"] = revision
+}
+
+func rawTemplate(template *corev1.PodTemplateSpec) runtime.RawExtension {
+	buf := new(bytes.Buffer)
+	enc := json.NewEncoder(buf)
+	if err := enc.Encode(template); err != nil {
+		panic(err)
+	}
+	return runtime.RawExtension{Raw: buf.Bytes()}
 }
