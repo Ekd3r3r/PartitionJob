@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/created-by: partitionjob
 spec:
-  replicas: 4
+  replicas: 3
   partitions: 2
   selector:
     matchLabels:
@@ -19,4 +19,4 @@ spec:
     spec:
       containers:
         - name: nginx-container
-          image: nginx-alpine
+          image: nginx-stable-alpine-slim

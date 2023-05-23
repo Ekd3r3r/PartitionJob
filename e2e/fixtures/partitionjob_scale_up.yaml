@@ -11,7 +11,7 @@ metadata:
     app.kubernetes.io/created-by: partitionjob
 spec:
   replicas: 6
-  partitions: 1
+  partitions: 2
   selector:
     matchLabels:
       app: partitionjob-sample
