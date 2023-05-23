@@ -39,7 +39,7 @@ jobs:
       
       - name: Run Docker Push
         run: |
-          make docker push IMG=1d3r3r/partitionjob:latest
+          make docker-push IMG=1d3r3r/partitionjob:latest
 
       - name: Deploy
         run: |
