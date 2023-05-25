@@ -78,7 +78,7 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	revisionCount := len(allRevisions)
-	var currentRevision, updatedRevision *apps.ControllerRevision
+	var currentRevision, updatedRevision, previousRevision *apps.ControllerRevision
 
 	if revisionCount > 0 && allRevisions[revisionCount-1] != nil {
 		//revision is sorted in ascending order, so the updated revision will be the last revision
@@ -88,6 +88,10 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if revisionCount > 1 && allRevisions[revisionCount-2] != nil {
 		//revision is sorted in ascending order, so the current revision will be the second to last revision
 		currentRevision = allRevisions[revisionCount-2]
+	}
+
+	if revisionCount > 2 && allRevisions[revisionCount-3] != nil {
+		previousRevision = allRevisions[revisionCount-3]
 	}
 
 	l.Info("Revision Info", "current revision:", currentRevision, "updated revision:", updatedRevision, "collision count:", collisonCount)
@@ -111,8 +115,13 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if updatedRevision != nil && podRevision == updatedRevision.Name {
 			newRevisionPods = append(newRevisionPods, pod)
 		}
+		if previousRevision != nil && podRevision == previousRevision.Name {
+			r.Delete(ctx, pod)
+			numAvailableReplicas--
+		}
 	}
 
+	// if currentRevision is not set because it is the first pass, set it equal to updatedRevision
 	if currentRevision == nil {
 		currentRevision = updatedRevision
 	}
@@ -313,6 +322,7 @@ func (r *PartitionJobReconciler) GetRevision(ctx context.Context, partitionJob *
 	equivalentCount := len(equivalentRevisions)
 
 	if equivalentCount > 0 && history.EqualRevision(revisions[revisionCount-1], equivalentRevisions[equivalentCount-1]) {
+		//if the equivalent revision is the last updated revision, no need to do anything else
 		return revisions, collisionCount, nil
 	} else if equivalentCount > 0 {
 		//get equivalent revision and increment the revision
