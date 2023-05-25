@@ -19,4 +19,4 @@ spec:
     spec:
       containers:
         - name: nginx-container
-          image: nginx-stable-alpine-slim
+          image: nginx:alpine

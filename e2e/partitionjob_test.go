@@ -1,217 +1,246 @@
-// package e2e
+package e2e
 
-// import (
-// 	"strconv"
-// 	"strings"
-// 	"testing"
-// 	"time"
-// )
+import (
+	"context"
+	"flag"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"testing"
+	"time"
 
-// func TestPartitionJob(t *testing.T) {
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+)
 
-// 	// delete the namespace if it already exists
-// 	cmd := kubectl("delete", "namespace", "partitionjob-test", "--ignore-not-found")
-// 	if out, err := cmd.CombinedOutput(); err != nil {
-// 		t.Fatal(string(out))
-// 	}
+func TestPartitionJobs(t *testing.T) {
 
-// 	// create namespace
-// 	cmd = kubectl("apply", "-f", "fixtures/namespace.yaml")
-// 	if out, err := cmd.CombinedOutput(); err != nil {
-// 		t.Fatal(string(out))
-// 	}
+	// delete the namespace if it already exists
+	cmd := kubectl("delete", "namespace", "partitionjob-test", "--ignore-not-found")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatal(string(out))
+	}
 
-// 	// Test PartitionJob Scaling
-// 	cases := []struct {
-// 		description     string
-// 		fixtureFilePath string
-// 	}{
-// 		{
-// 			description:     "Deploying PartitionJob",
-// 			fixtureFilePath: "fixtures/partitionjob_deploy.yaml",
-// 		},
-// 		{
-// 			description:     "Scaling up PartitionJob",
-// 			fixtureFilePath: "fixtures/partitionjob_scale_up.yaml",
-// 		},
-// 		{
-// 			description:     "Scaling down PartitionJob",
-// 			fixtureFilePath: "fixtures/partitionjob_scale_down.yaml",
-// 		},
-// 	}
+	// create namespace
+	cmd = kubectl("apply", "-f", "fixtures/namespace.yaml")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatal(string(out))
+	}
 
-// 	for _, tc := range cases {
+	// Test PartitionJob Scaling
+	cases := []struct {
+		description     string
+		fixtureFilePath string
+	}{
+		{
+			description:     "Deploying PartitionJob",
+			fixtureFilePath: "fixtures/partitionjob_deploy.yaml",
+		},
+		{
+			description:     "Scaling up PartitionJob",
+			fixtureFilePath: "fixtures/partitionjob_scale_up.yaml",
+		},
+		{
+			description:     "Scaling down PartitionJob",
+			fixtureFilePath: "fixtures/partitionjob_scale_down.yaml",
+		},
+	}
+	// Path to your kubeconfig file
+	kubeconfig := flag.String("kubeconfig", filepath.Join(os.Getenv("HOME"), ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+	flag.Parse()
 
-// 		t.Log(tc.description)
+	// BuildConfigFromFlags creates a Kubernetes REST client configuration
+	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	if err != nil {
+		log.Fatalf("Error building kubeconfig: %v", err)
+	}
 
-// 		cmd = kubectl("apply", "-f", tc.fixtureFilePath)
-// 		if out, err := cmd.CombinedOutput(); err != nil {
-// 			t.Fatal(string(out))
-// 		}
+	// creates the clientset
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		panic(err.Error())
+	}
 
-// 		deadline, ok := t.Deadline()
-// 		timeout := time.Until(deadline)
-// 		if !ok {
-// 			timeout = 300 * time.Second
-// 		}
+	for _, tc := range cases {
 
-// 		cmd = kubectl("wait", "--for=condition=ready", "--timeout="+timeout.String(), "pods", "--selector=app=partitionjob-sample", "--namespace=partitionjob-test")
-// 		if out, err := cmd.CombinedOutput(); err != nil {
-// 			t.Fatal(string(out))
-// 		}
+		t.Log(tc.description)
 
-// 		cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.replicas}}")
-// 		out, err := cmd.CombinedOutput()
-// 		if err != nil {
-// 			t.Fatal(string(out))
-// 		}
+		cmd = kubectl("apply", "-f", tc.fixtureFilePath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatal(string(out))
+		}
 
-// 		expectedReplicas, err := strconv.Atoi(string(out))
-// 		if err != nil {
-// 			t.Fatal(err)
-// 		}
+		// deadline, ok := t.Deadline()
+		// timeout := time.Until(deadline)
+		// if !ok {
+		// 	timeout = 300 * time.Second
+		// }
 
-// 		t.Log("Expected replicas: ", expectedReplicas)
+		// cmd = kubectl("wait", "--for=condition=ready", "--timeout="+timeout.String(), "pods", "--selector=app=partitionjob-sample", "--namespace=partitionjob-test")
+		// if out, err := cmd.CombinedOutput(); err != nil {
+		// 	t.Fatal(string(out))
+		// }
 
-// 		//wait for the pods to be scaled
-// 		time.Sleep(45 * time.Second)
+		cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.replicas}}")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatal(string(out))
+		}
 
-// 		cmd = kubectl("get", "pods", "--field-selector=status.phase=Running", "--namespace=partitionjob-test", "--selector=app=partitionjob-sample", "--no-headers", "-o", "name")
-// 		out, err = cmd.CombinedOutput()
-// 		if err != nil {
-// 			t.Fatal(string(out))
-// 		}
+		expectedReplicas, err := strconv.Atoi(string(out))
+		if err != nil {
+			t.Fatal(err)
+		}
 
-// 		actualReplicas := len(strings.Fields(string(out)))
+		t.Log("Expected replicas: ", expectedReplicas)
 
-// 		t.Log("Actual replicas: ", actualReplicas)
+		//wait for the pods to be scaled
+		time.Sleep(45 * time.Second)
 
-// 		if actualReplicas != expectedReplicas {
-// 			t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
-// 		}
+		actualReplicas := countPods(clientset, "status.phase=Running", "app=partitionjob-sample", "partitionjob-test")
 
-// 		t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
+		t.Log("Actual replicas: ", actualReplicas)
 
-// 	}
+		if actualReplicas != expectedReplicas {
+			t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
+		}
 
-// 	//Test Partitions, Pod Template change and Scaling
-// 	cases = []struct {
-// 		description     string
-// 		fixtureFilePath string
-// 	}{
-// 		{
-// 			description:     "Change Pod Template",
-// 			fixtureFilePath: "fixtures/partitionjob_deploy_pod_template_change.yaml",
-// 		},
-// 		{
-// 			description:     "Scaling up PartitionJob with Partition",
-// 			fixtureFilePath: "fixtures/partitionjob_scale_up_with_partition.yaml",
-// 		},
-// 		{
-// 			description:     "Scaling down PartitionJob with Partition",
-// 			fixtureFilePath: "fixtures/partitionjob_scale_down_with_partition.yaml",
-// 		},
-// 		{
-// 			description:     "Partition == 0",
-// 			fixtureFilePath: "fixtures/partitionjob_partition_eq_zero.yaml",
-// 		},
-// 		{
-// 			description:     "Partition < 0",
-// 			fixtureFilePath: "fixtures/partitionjob_partition_smallerthan_zero.yaml",
-// 		},
-// 		{
-// 			description:     "Partition greater than number of replicas",
-// 			fixtureFilePath: "fixtures/partitionjob_partition_greaterthan_replicas.yaml",
-// 		},
-// 	}
+		t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
 
-// 	for _, tc := range cases {
+	}
 
-// 		t.Log(tc.description)
+	//Test Partitions, Pod Template change and Scaling
+	cases = []struct {
+		description     string
+		fixtureFilePath string
+	}{
+		{
+			description:     "Change Pod Template",
+			fixtureFilePath: "fixtures/partitionjob_deploy_pod_template_change.yaml",
+		},
+		{
+			description:     "Scaling up PartitionJob with Partition",
+			fixtureFilePath: "fixtures/partitionjob_scale_up_with_partition.yaml",
+		},
+		{
+			description:     "Scaling down PartitionJob with Partition",
+			fixtureFilePath: "fixtures/partitionjob_scale_down_with_partition.yaml",
+		},
+		{
+			description:     "Partition greater than number of replicas",
+			fixtureFilePath: "fixtures/partitionjob_scale_partition_greaterthan_replicas.yaml",
+		},
+	}
 
-// 		cmd = kubectl("apply", "-f", tc.fixtureFilePath)
-// 		if out, err := cmd.CombinedOutput(); err != nil {
-// 			t.Fatal(string(out))
-// 		}
+	for _, tc := range cases {
 
-// 		deadline, ok := t.Deadline()
-// 		timeout := time.Until(deadline)
-// 		if !ok {
-// 			timeout = 300 * time.Second
-// 		}
+		t.Log(tc.description)
 
-// 		cmd = kubectl("wait", "--for=condition=ready", "--timeout="+timeout.String(), "pods", "--selector=app=partitionjob-sample", "--namespace=partitionjob-test")
-// 		if out, err := cmd.CombinedOutput(); err != nil {
-// 			t.Fatal(string(out))
-// 		}
+		cmd = kubectl("apply", "-f", tc.fixtureFilePath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatal(string(out))
+		}
 
-// 		cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.replicas}}")
-// 		out, err := cmd.CombinedOutput()
-// 		if err != nil {
-// 			t.Fatal(string(out))
-// 		}
+		deadline, ok := t.Deadline()
+		timeout := time.Until(deadline)
+		if !ok {
+			timeout = 300 * time.Second
+		}
 
-// 		expectedReplicas, err := strconv.Atoi(string(out))
-// 		if err != nil {
-// 			t.Fatal(err)
-// 		}
+		cmd = kubectl("wait", "--for=condition=ready", "--timeout="+timeout.String(), "pods", "--selector=app=partitionjob-sample", "--namespace=partitionjob-test")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatal(string(out))
+		}
 
-// 		t.Log("Expected replicas: ", expectedReplicas)
+		cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.replicas}}")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatal(string(out))
+		}
 
-// 		cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.partitions}}")
-// 		out, err = cmd.CombinedOutput()
-// 		if err != nil {
-// 			t.Fatal(string(out))
-// 		}
+		expectedReplicas, err := strconv.Atoi(string(out))
+		if err != nil {
+			t.Fatal(err)
+		}
 
-// 		expectedPartitions, err := strconv.Atoi(string(out))
-// 		if err != nil {
-// 			t.Fatal(err)
-// 		}
+		t.Log("Expected replicas: ", expectedReplicas)
 
-// 		t.Log("Expected partitions: ", expectedPartitions)
+		cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.partitions}}")
+		out, err = cmd.CombinedOutput()
+		if err != nil {
+			t.Fatal(string(out))
+		}
 
-// 		//wait for the pods to be scaled
-// 		time.Sleep(45 * time.Second)
+		expectedPartitions, err := strconv.Atoi(string(out))
+		if err != nil {
+			t.Fatal(err)
+		}
 
-// 		cmd = kubectl("get", "pods", "--field-selector=status.phase=Running", "--namespace=partitionjob-test", "--selector=app=partitionjob-sample", "--no-headers", "-o", "name")
-// 		out, err = cmd.CombinedOutput()
-// 		if err != nil {
-// 			t.Fatal(string(out))
-// 		}
+		t.Log("Expected partitions: ", expectedPartitions)
 
-// 		actualReplicas := len(strings.Fields(string(out)))
+		//wait for the pods to be scaled
+		time.Sleep(45 * time.Second)
 
-// 		t.Log("Actual replicas: ", actualReplicas)
+		actualReplicas := countPods(clientset, "status.phase=Running", "app=partitionjob-sample", "partitionjob-test")
 
-// 		if actualReplicas != expectedReplicas {
-// 			t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
-// 		}
+		t.Log("Actual replicas: ", actualReplicas)
 
-// 		t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
+		if actualReplicas != expectedReplicas {
+			t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
+		}
 
-// 		cmd = kubectl("get", "pods", "--field-selector=status.phase=Running", "--namespace=partitionjob-test", "--selector=app=partitionjob-sample", "--no-headers", "-o", "name")
-// 		out, err = cmd.CombinedOutput()
-// 		if err != nil {
-// 			t.Fatal(string(out))
-// 		}
+		t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
 
-// 		actualPartitions := len(strings.Fields(string(out)))
+		updateRevision := getUpdateRevision(clientset, "partitionjob-test")
 
-// 		t.Log("Actual partitions: ", actualPartitions)
+		labelSelectors := map[string]string{
+			"app":                       "partitionjob-sample",
+			"PartitionJobRevisionLabel": updateRevision,
+		}
 
-// 		if actualPartitions != expectedPartitions {
-// 			t.Fatalf("Expected partitions %d, got %d", expectedPartitions, actualPartitions)
-// 		}
+		actualPartitions := countPods(clientset, "status.phase=Running", metav1.FormatLabelSelector(metav1.SetAsLabelSelector(labelSelectors)), "partitionjob-test")
+		t.Log("Actual partitions: ", actualPartitions)
 
-// 		t.Logf("PartitionJob successfully created %d paritition pods", expectedPartitions)
+		if actualPartitions != expectedPartitions {
+			t.Fatalf("Expected partitions %d, got %d", expectedPartitions, actualPartitions)
+		}
 
-// 	}
+		t.Logf("PartitionJob successfully created %d paritition pods", expectedPartitions)
 
-// 	t.Log("Cleaning up PartitionJob")
-// 	cmd = kubectl("delete", "namespace", "partitionjob-test", "--ignore-not-found")
-// 	if out, err := cmd.CombinedOutput(); err != nil {
-// 		t.Fatal(string(out))
-// 	}
+	}
 
-// }
+	t.Log("Cleaning up PartitionJob")
+	cmd = kubectl("delete", "namespace", "partitionjob-test", "--ignore-not-found")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatal(string(out))
+	}
+
+}
+
+func countPods(clientset *kubernetes.Clientset, fieldSelector string, labelSelectors string, namespace string) int {
+	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{LabelSelector: labelSelectors, FieldSelector: fieldSelector})
+	if err != nil {
+		panic(err.Error())
+	}
+
+	return len(pods.Items)
+}
+
+func getUpdateRevision(clientset *kubernetes.Clientset, namespace string) string {
+	controllerRevisions, err := clientset.AppsV1().ControllerRevisions(namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		panic(err.Error())
+	}
+
+	// Sort the ControllerRevisions by revision number in descending order
+	sort.SliceStable(controllerRevisions.Items, func(i, j int) bool {
+		return controllerRevisions.Items[i].Revision > controllerRevisions.Items[j].Revision
+	})
+
+	// Get the ControllerRevision with the highest revision number
+	return controllerRevisions.Items[0].Name
+
+}
