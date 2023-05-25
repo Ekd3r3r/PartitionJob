@@ -17,22 +17,18 @@ limitations under the License.
 package controllers
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"reflect"
-	"time"
 
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	informers "k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/pkg/controller/history"
 	webappv1 "my.domain/partitionJob/api/v1"
+	utils "my.domain/partitionJob/utils"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -42,8 +38,7 @@ import (
 // PartitionJobReconciler reconciles a PartitionJob object
 type PartitionJobReconciler struct {
 	client.Client
-	Scheme            *runtime.Scheme
-	controllerHistory history.Interface
+	Scheme *runtime.Scheme
 }
 
 //+kubebuilder:rbac:groups=webapp.my.domain,resources=partitionjobs,verbs=get;list;watch;create;update;patch;delete
@@ -62,76 +57,87 @@ type PartitionJobReconciler struct {
 func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 
-	config, err := ctrl.GetConfig()
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	if r.controllerHistory == nil {
-		informerFactory := informers.NewSharedInformerFactory(clientset, 2*time.Minute)
-		r.controllerHistory = history.NewHistory(clientset, informerFactory.Apps().V1().ControllerRevisions().Lister())
-	}
-
-	instance := &webappv1.PartitionJob{}
-	err = r.Get(context.TODO(), req.NamespacedName, instance)
+	instance, err := r.GetPartitionJob(ctx, req)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
+	partitionJob := instance.DeepCopy()
 
-	partitionJob := instance
-	podList := &corev1.PodList{}
-	labelsToMatch := partitionJob.Spec.Selector.MatchLabels
-	labelSelector := labels.SelectorFromSet(labelsToMatch)
+	allRevisions, err := r.ListRevisions(ctx, partitionJob)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	history.SortControllerRevisions(allRevisions)
 
-	allRevisions, err := r.ListRevisions(partitionJob)
+	allRevisions, collisonCount, err := r.GetRevision(ctx, partitionJob, allRevisions)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	history.SortControllerRevisions(allRevisions)
+	revisionCount := len(allRevisions)
+	var currentRevision, updatedRevision, previousRevision *apps.ControllerRevision
 
-	currentRevision, updatedRevision, collisonCount, err := r.GetRevision(partitionJob, allRevisions)
-	if err != nil {
-		return ctrl.Result{}, err
+	if revisionCount > 0 && allRevisions[revisionCount-1] != nil {
+		//revision is sorted in ascending order, so the updated revision will be the last revision
+		updatedRevision = allRevisions[revisionCount-1]
+	}
+
+	if revisionCount > 1 && allRevisions[revisionCount-2] != nil {
+		//revision is sorted in ascending order, so the current revision will be the second to last revision
+		currentRevision = allRevisions[revisionCount-2]
+	}
+
+	if revisionCount > 2 && allRevisions[revisionCount-3] != nil {
+		previousRevision = allRevisions[revisionCount-3]
 	}
 
 	l.Info("Revision Info", "current revision:", currentRevision, "updated revision:", updatedRevision, "collision count:", collisonCount)
 
-	listOptions := &client.ListOptions{Namespace: partitionJob.Namespace, LabelSelector: labelSelector}
-	if err = r.List(context.TODO(), podList, listOptions); err != nil {
+	availableReplicas, err := r.GetAvailablePods(ctx, partitionJob)
+	if err != nil {
 		return ctrl.Result{}, err
-	}
-
-	// Count the pods that are pending or running as available
-	var availableReplicas []corev1.Pod
-	for _, pod := range podList.Items {
-		if pod.ObjectMeta.DeletionTimestamp != nil {
-			continue
-		}
-		if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
-			availableReplicas = append(availableReplicas, pod)
-		}
 	}
 	numAvailableReplicas := int32(len(availableReplicas))
 
+	oldRevisionPods := make([]*corev1.Pod, 0)
+	newRevisionPods := make([]*corev1.Pod, 0)
+
+	for _, pod := range availableReplicas {
+
+		podRevision := utils.GetPodRevision(pod)
+
+		if currentRevision != nil && podRevision == currentRevision.Name {
+			oldRevisionPods = append(oldRevisionPods, pod)
+		}
+		if updatedRevision != nil && podRevision == updatedRevision.Name {
+			newRevisionPods = append(newRevisionPods, pod)
+		}
+		if previousRevision != nil && podRevision == previousRevision.Name {
+			r.Delete(ctx, pod)
+			numAvailableReplicas--
+		}
+	}
+
+	// if currentRevision is not set because it is the first pass, set it equal to updatedRevision
+	if currentRevision == nil {
+		currentRevision = updatedRevision
+	}
+
 	observedStatus := webappv1.PartitionJobStatus{
-		Replicas:          partitionJob.Spec.Replicas, //desired replicas
-		AvailableReplicas: numAvailableReplicas,       //observed replicas
-		CurrentRevision:   currentRevision.Name,       //current revision
-		UpdateRevision:    updatedRevision.Name,       //update revision
+		Replicas:          partitionJob.Spec.Replicas,  //desired replicas
+		AvailableReplicas: numAvailableReplicas,        //observed replicas
+		CurrentReplicas:   int32(len(oldRevisionPods)), //current replicas
+		UpdatedReplicas:   int32(len(newRevisionPods)), //updated replicas
+		CurrentRevision:   currentRevision.Name,        //current revision
+		UpdateRevision:    updatedRevision.Name,        //update revision
 	}
 
 	if !reflect.DeepEqual(partitionJob.Status, observedStatus) {
 		partitionJob.Status = observedStatus
-		if err := r.Status().Update(context.TODO(), partitionJob); err != nil {
+		if err := r.Status().Update(ctx, partitionJob); err != nil {
 			l.Error(err, "Failed to update PartitionJob status")
 			return ctrl.Result{}, err
 		}
@@ -140,30 +146,53 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if numAvailableReplicas > partitionJob.Spec.Replicas {
 
 		l.Info("Scaling down pods", "Currently available", numAvailableReplicas, "Required replicas", partitionJob.Spec.Replicas)
-		diff := numAvailableReplicas - partitionJob.Spec.Replicas
-		dpods := availableReplicas[:diff]
-		for _, dpod := range dpods {
-			err = r.Delete(context.TODO(), &dpod)
-			if err != nil {
+		numPodsToBeDeleted := numAvailableReplicas - partitionJob.Spec.Replicas
+		diff := partitionJob.Status.UpdatedReplicas - *partitionJob.Spec.Partitions
+
+		for i := 1; i <= int(numPodsToBeDeleted); i++ {
+			var dpod *corev1.Pod
+			if diff > 0 {
+				dpod = newRevisionPods[len(newRevisionPods)-i]
+				diff--
+			} else {
+				dpod = oldRevisionPods[len(oldRevisionPods)-i]
+			}
+
+			if err = r.Delete(ctx, dpod); err != nil {
 				l.Error(err, "Failed to delete pod", "pod.name", dpod.Name)
 				return ctrl.Result{}, err
 			}
 		}
+
 		return ctrl.Result{}, nil
 	}
 
 	if numAvailableReplicas < partitionJob.Spec.Replicas {
 		l.Info("Scaling up pods", "Currently available", numAvailableReplicas, "Required replicas", partitionJob.Spec.Replicas)
-		// Define a new Pod object
-		pod := CreateNewPod(partitionJob)
+		diff := *partitionJob.Spec.Partitions - partitionJob.Status.UpdatedReplicas
+
+		var pod *corev1.Pod
+
+		if diff > 0 {
+			//create pod with new revision
+			template := utils.RawToTemplate(updatedRevision.Data.Raw)
+			pod = utils.CreateNewPod(partitionJob, template)
+
+			utils.SetPodRevision(pod, updatedRevision.Name)
+		} else {
+			//create pod with old revision
+			template := utils.RawToTemplate(currentRevision.Data.Raw)
+			pod = utils.CreateNewPod(partitionJob, template)
+
+			utils.SetPodRevision(pod, currentRevision.Name)
+		}
+
 		// Set partitionJob instance as the owner and controller
 		if err := controllerutil.SetControllerReference(partitionJob, pod, r.Scheme); err != nil {
 			return ctrl.Result{}, err
 		}
 
-		setPodRevision(pod, currentRevision.Name)
-
-		err = r.Create(context.TODO(), pod)
+		err = r.Create(ctx, pod)
 		if err != nil {
 			l.Error(err, "Failed to create pod", "pod.name", pod.Name)
 			return ctrl.Result{}, err
@@ -171,30 +200,12 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
-	replicaCount := partitionJob.Spec.Replicas
-	oldRevisionPods := make([]corev1.Pod, replicaCount)
-	newRevisionPods := make([]corev1.Pod, replicaCount)
-
-	for _, pod := range availableReplicas {
-
-		podRevision := getPodRevision(&pod)
-
-		if podRevision == currentRevision.Name {
-			oldRevisionPods = append(oldRevisionPods, pod)
-			partitionJob.Status.CurrentReplicas++
-		}
-		if podRevision == updatedRevision.Name {
-			newRevisionPods = append(newRevisionPods, pod)
-			partitionJob.Status.UpdatedReplicas++
-		}
-	}
-
-	if partitionJob.Status.UpdatedReplicas > *partitionJob.Spec.Partitions {
+	if currentRevision != updatedRevision && partitionJob.Status.UpdatedReplicas > *partitionJob.Spec.Partitions {
 		l.Info("Scaling down new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
 		diff := partitionJob.Status.UpdatedReplicas - *partitionJob.Spec.Partitions
 		dpods := newRevisionPods[:diff]
 		for _, dpod := range dpods {
-			err = r.Delete(context.TODO(), &dpod)
+			err = r.Delete(ctx, dpod)
 			if err != nil {
 				l.Error(err, "Failed to delete pod", "pod.name", dpod.Name)
 				return ctrl.Result{}, err
@@ -203,27 +214,28 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		return ctrl.Result{}, nil
 
-	} else if partitionJob.Status.UpdatedReplicas < *partitionJob.Spec.Partitions {
+	} else if currentRevision != updatedRevision && partitionJob.Status.UpdatedReplicas < *partitionJob.Spec.Partitions {
 		l.Info("Scaling up new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
 		diff := *partitionJob.Spec.Partitions - partitionJob.Status.UpdatedReplicas
 		dpods := oldRevisionPods[:diff]
 		for _, dpod := range dpods {
-			err = r.Delete(context.TODO(), &dpod)
+			err = r.Delete(ctx, dpod)
 			if err != nil {
 				l.Error(err, "Failed to delete pod", "pod.name", dpod.Name)
 				return ctrl.Result{}, err
 			}
 
 			// Define a new Pod object
-			pod := CreateNewPod(partitionJob)
+			template := utils.RawToTemplate(updatedRevision.Data.Raw)
+			pod := utils.CreateNewPod(partitionJob, template)
+
+			utils.SetPodRevision(pod, updatedRevision.Name)
 			// Set partitionJob instance as the owner and controller
 			if err := controllerutil.SetControllerReference(partitionJob, pod, r.Scheme); err != nil {
 				return ctrl.Result{}, err
 			}
 
-			setPodRevision(pod, updatedRevision.Name)
-
-			err = r.Create(context.TODO(), pod)
+			err = r.Create(ctx, pod)
 			if err != nil {
 				l.Error(err, "Failed to create pod", "pod.name", pod.Name)
 				return ctrl.Result{}, err
@@ -237,137 +249,137 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 }
 
-// returns a pod with the same name/namespace as the CR, using the pod spec described in the CR
-func CreateNewPod(cr *webappv1.PartitionJob) *corev1.Pod {
-	labels := cr.Spec.Selector.MatchLabels
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: cr.Name + "-pod",
-			Namespace:    cr.Namespace,
-			Labels:       labels,
-		},
-		Spec: cr.Spec.Template.Spec,
+// GetPartitionJob retrieves the current resource instance of PartitionJob
+func (r *PartitionJobReconciler) GetPartitionJob(ctx context.Context, req ctrl.Request) (*webappv1.PartitionJob, error) {
+	instance := &webappv1.PartitionJob{}
+	err := r.Get(ctx, req.NamespacedName, instance)
+	if err != nil {
+		return nil, err
 	}
+
+	return instance, nil
+}
+
+// GetAvailalePods returs an array of Pods that match the labels described in partitionJob spec's selector
+func (r *PartitionJobReconciler) GetAvailablePods(ctx context.Context, partitionJob *webappv1.PartitionJob) ([]*corev1.Pod, error) {
+	podList := &corev1.PodList{}
+	labelsToMatch := partitionJob.Spec.Selector.MatchLabels
+	labelSelector := labels.SelectorFromSet(labelsToMatch)
+
+	listOptions := &client.ListOptions{Namespace: partitionJob.Namespace, LabelSelector: labelSelector}
+	if err := r.List(context.TODO(), podList, listOptions); err != nil {
+		return nil, err
+	}
+
+	// Count the pods that are pending or running as available
+	availableReplicas := make([]*corev1.Pod, 0)
+	for index, pod := range podList.Items {
+		if pod.ObjectMeta.DeletionTimestamp != nil {
+			continue
+		}
+		if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
+			availableReplicas = append(availableReplicas, &podList.Items[index])
+		}
+	}
+
+	return availableReplicas, nil
 }
 
 // returns an array of ControllerRevisions with revisions of PartitionJob resource.
-func (r *PartitionJobReconciler) ListRevisions(partitionJob *webappv1.PartitionJob) ([]*apps.ControllerRevision, error) {
-	selector, err := metav1.LabelSelectorAsSelector(partitionJob.Spec.Selector)
-	if err != nil {
+func (r *PartitionJobReconciler) ListRevisions(ctx context.Context, partitionJob *webappv1.PartitionJob) ([]*apps.ControllerRevision, error) {
+	revisionList := &apps.ControllerRevisionList{}
+	labelsToMatch := partitionJob.Spec.Selector.MatchLabels
+	labelSelector := labels.SelectorFromSet(labelsToMatch)
+
+	listOptions := &client.ListOptions{Namespace: partitionJob.Namespace, LabelSelector: labelSelector}
+
+	if err := r.List(ctx, revisionList, listOptions); err != nil {
 		return nil, err
 	}
 
-	return r.controllerHistory.ListControllerRevisions(partitionJob, selector)
+	allRevisions := make([]*apps.ControllerRevision, 0)
+	for index := range revisionList.Items {
+		allRevisions = append(allRevisions, &revisionList.Items[index])
+	}
+
+	return allRevisions, nil
 }
 
-// creates a new controller revision
-func CreateNewRevision(partitionJob *webappv1.PartitionJob, revision int64, collisionCount *int32) (*apps.ControllerRevision, error) {
-	cr, err := history.NewControllerRevision(partitionJob, partitionJob.GroupVersionKind(), partitionJob.Spec.Selector.MatchLabels, rawTemplate(&partitionJob.Spec.Template), revision, collisionCount)
+func (r *PartitionJobReconciler) GetRevision(ctx context.Context, partitionJob *webappv1.PartitionJob, revisions []*apps.ControllerRevision) ([]*apps.ControllerRevision, int32, error) {
+	var updatedRevision *apps.ControllerRevision
+	var collisionCount int32 = 0
 
-	if err != nil {
-		return nil, err
-	}
-
-	if cr.ObjectMeta.Annotations == nil {
-		cr.ObjectMeta.Annotations = make(map[string]string)
-	}
-
-	for key, value := range partitionJob.Annotations {
-		cr.ObjectMeta.Annotations[key] = value
-	}
-
-	return cr, nil
-}
-
-// nextRevision finds the next valid revision number based on revisions. If the length of revisions
-// is 0 this is 1. Otherwise, it is 1 greater than the largest revision's Revision. This method
-// assumes that revisions has been sorted by Revision.
-func GetNextRevision(revisions []*apps.ControllerRevision) int64 {
-	count := len(revisions)
-	if count <= 0 {
-		return 1
-	}
-	return revisions[count-1].Revision + 1
-}
-
-func (r *PartitionJobReconciler) GetRevision(partitionJob *webappv1.PartitionJob, revisions []*apps.ControllerRevision) (*apps.ControllerRevision, *apps.ControllerRevision, int32, error) {
-	var currentRevision, updatedRevision *apps.ControllerRevision
-
-	//revisionCount := len(revisions)
+	revisionCount := len(revisions)
 	history.SortControllerRevisions(revisions)
 
-	var collisionCount int32 = 0 //TODO
-
-	updatedRevision, err := CreateNewRevision(partitionJob, GetNextRevision(revisions), &collisionCount)
+	updatedRevision, err := utils.CreateNewRevision(partitionJob, utils.GetNextRevision(revisions), &collisionCount)
 	if err != nil {
-		return nil, nil, collisionCount, err
+		return nil, collisionCount, err
 	}
 
 	//find any equivalent revisions
 	equivalentRevisions := history.FindEqualRevisions(revisions, updatedRevision)
 	equivalentCount := len(equivalentRevisions)
 
-	if equivalentCount > 0 {
-		//roll back by decrementing the revision of the equivalent revision
-		updatedRevision, err = r.controllerHistory.UpdateControllerRevision(equivalentRevisions[equivalentCount-1], updatedRevision.Revision)
-		if err != nil {
-			return nil, nil, collisionCount, err
+	if equivalentCount > 0 && history.EqualRevision(revisions[revisionCount-1], equivalentRevisions[equivalentCount-1]) {
+		//if the equivalent revision is the last updated revision, no need to do anything else
+		return revisions, collisionCount, nil
+	} else if equivalentCount > 0 {
+		//get equivalent revision and increment the revision
+		rev := equivalentRevisions[equivalentCount-1]
+		rev.Revision = updatedRevision.Revision
+
+		if err := r.Update(ctx, rev); err != nil {
+			return nil, collisionCount, err
 		}
 	} else {
 		//if there is no equivalent revision, we create one
-		updatedRevision, err = r.controllerHistory.CreateControllerRevision(partitionJob, updatedRevision, &collisionCount)
-		if err != nil {
-			return nil, nil, collisionCount, err
+		clone := updatedRevision.DeepCopy()
+		clone.Namespace = partitionJob.GetNamespace()
+
+		//only keep the 5 most recent revisions
+		diff := revisionCount - 5
+		if diff >= 0 {
+			for i := 0; i < diff; i++ {
+				rev := revisions[i]
+				if err := r.Delete(ctx, rev); err != nil {
+					return nil, collisionCount, err
+				}
+			}
+		}
+
+		if err := r.Create(ctx, clone); err != nil {
+			if errors.IsAlreadyExists(err) {
+				var cloneNamespacedName types.NamespacedName = types.NamespacedName{
+					Namespace: clone.Namespace,
+					Name:      clone.Name,
+				}
+
+				if err = r.Get(ctx, cloneNamespacedName, clone); err != nil {
+					return nil, collisionCount, err
+				}
+
+				collisionCount++
+			}
 		}
 	}
 
-	// attempt to find the revision that corresponds to the current revision
-	for i := range revisions {
-		if revisions[i].Name == partitionJob.Status.CurrentRevision {
-			currentRevision = revisions[i]
-			break
-		}
-	}
+	updatedRevisions, _ := r.ListRevisions(ctx, partitionJob)
+	history.SortControllerRevisions(updatedRevisions)
 
-	// if the current revision is nil we initialize the history by setting it to the update revision
-	if currentRevision == nil {
-		currentRevision = updatedRevision
-	}
-
-	return currentRevision, updatedRevision, collisionCount, nil
+	return updatedRevisions, collisionCount, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PartitionJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&webappv1.PartitionJob{}).
 		Owns(&corev1.Pod{}).
+		Complete(r); err != nil {
+		return err
+	}
+
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&apps.ControllerRevision{}).
 		Complete(r)
-}
-
-// getPodRevision gets the revision of Pod by inspecting the PartitionJobRevisionLabel. If pod has no revision the empty
-// string is returned.
-func getPodRevision(pod *corev1.Pod) string {
-	if pod.Labels == nil {
-		return ""
-	}
-
-	return pod.Labels["PartitionJobRevisionLabel"]
-}
-
-// setPodRevision sets the revision of Pod to revision by adding the StatefulSetRevisionLabel
-func setPodRevision(pod *corev1.Pod, revision string) {
-	if pod.Labels == nil {
-		pod.Labels = make(map[string]string)
-	}
-	pod.Labels["PartitionJobRevisionLabel"] = revision
-}
-
-func rawTemplate(template *corev1.PodTemplateSpec) runtime.RawExtension {
-	buf := new(bytes.Buffer)
-	enc := json.NewEncoder(buf)
-	if err := enc.Encode(template); err != nil {
-		panic(err)
-	}
-	return runtime.RawExtension{Raw: buf.Bytes()}
 }

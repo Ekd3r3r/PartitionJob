@@ -7,10 +7,11 @@ metadata:
     app.kubernetes.io/part-of: partitionjob
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/created-by: partitionjob
+    app: partitionjob-sample
   name: partitionjob-sample
 spec:
-  replicas: 5
-  partitions: 1
+  replicas: 3
+  partitions: 2
   selector:
     matchLabels:
       app: partitionjob-sample
@@ -18,4 +19,4 @@ spec:
     spec:
       containers:
         - name: nginx-container
-          image: nginx:stable
+          image: nginx:latest
