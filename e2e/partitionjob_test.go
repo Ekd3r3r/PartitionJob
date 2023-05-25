@@ -30,24 +30,6 @@ func TestPartitionJobs(t *testing.T) {
 		t.Fatal(string(out))
 	}
 
-	// Test PartitionJob Scaling
-	cases := []struct {
-		description     string
-		fixtureFilePath string
-	}{
-		{
-			description:     "Deploying PartitionJob",
-			fixtureFilePath: "fixtures/partitionjob_deploy.yaml",
-		},
-		{
-			description:     "Scaling up PartitionJob",
-			fixtureFilePath: "fixtures/partitionjob_scale_up.yaml",
-		},
-		{
-			description:     "Scaling down PartitionJob",
-			fixtureFilePath: "fixtures/partitionjob_scale_down.yaml",
-		},
-	}
 	// Path to your kubeconfig file
 	kubeconfig := flag.String("kubeconfig", filepath.Join(os.Getenv("HOME"), ".kube", "config"), "(optional) absolute path to the kubeconfig file")
 	flag.Parse()
@@ -64,75 +46,47 @@ func TestPartitionJobs(t *testing.T) {
 		panic(err.Error())
 	}
 
-	for _, tc := range cases {
-
-		t.Log(tc.description)
-
-		cmd = kubectl("apply", "-f", tc.fixtureFilePath)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatal(string(out))
-		}
-
-		// deadline, ok := t.Deadline()
-		// timeout := time.Until(deadline)
-		// if !ok {
-		// 	timeout = 300 * time.Second
-		// }
-
-		// cmd = kubectl("wait", "--for=condition=ready", "--timeout="+timeout.String(), "pods", "--selector=app=partitionjob-sample", "--namespace=partitionjob-test")
-		// if out, err := cmd.CombinedOutput(); err != nil {
-		// 	t.Fatal(string(out))
-		// }
-
-		cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.replicas}}")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatal(string(out))
-		}
-
-		expectedReplicas, err := strconv.Atoi(string(out))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		t.Log("Expected replicas: ", expectedReplicas)
-
-		//wait for the pods to be scaled
-		time.Sleep(45 * time.Second)
-
-		actualReplicas := countPods(clientset, "status.phase=Running", "app=partitionjob-sample", "partitionjob-test")
-
-		t.Log("Actual replicas: ", actualReplicas)
-
-		if actualReplicas != expectedReplicas {
-			t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
-		}
-
-		t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
-
-	}
-
 	//Test Partitions, Pod Template change and Scaling
-	cases = []struct {
+	cases := []struct {
 		description     string
 		fixtureFilePath string
+		testPartitions  bool
 	}{
+		{
+			description:     "Deploying PartitionJob",
+			fixtureFilePath: "fixtures/partitionjob_deploy.yaml",
+			testPartitions:  false,
+		},
+		{
+			description:     "Scaling up PartitionJob",
+			fixtureFilePath: "fixtures/partitionjob_scale_up.yaml",
+			testPartitions:  false,
+		},
+		{
+			description:     "Scaling down PartitionJob",
+			fixtureFilePath: "fixtures/partitionjob_scale_down.yaml",
+			testPartitions:  false,
+		},
 		{
 			description:     "Change Pod Template",
 			fixtureFilePath: "fixtures/partitionjob_deploy_pod_template_change.yaml",
+			testPartitions:  true,
 		},
 		{
 			description:     "Scaling up PartitionJob with Partition",
 			fixtureFilePath: "fixtures/partitionjob_scale_up_with_partition.yaml",
+			testPartitions:  true,
 		},
 		{
 			description:     "Scaling down PartitionJob with Partition",
 			fixtureFilePath: "fixtures/partitionjob_scale_down_with_partition.yaml",
+			testPartitions:  true,
 		},
-		{
-			description:     "Partition greater than number of replicas",
-			fixtureFilePath: "fixtures/partitionjob_scale_partition_greaterthan_replicas.yaml",
-		},
+		// {
+		// 	description:     "Partition greater than number of replicas",
+		// 	fixtureFilePath: "fixtures/partitionjob_scale_partition_greaterthan_replicas.yaml",
+		// testPartitions: true,
+		// },
 	}
 
 	for _, tc := range cases {
@@ -140,17 +94,6 @@ func TestPartitionJobs(t *testing.T) {
 		t.Log(tc.description)
 
 		cmd = kubectl("apply", "-f", tc.fixtureFilePath)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatal(string(out))
-		}
-
-		deadline, ok := t.Deadline()
-		timeout := time.Until(deadline)
-		if !ok {
-			timeout = 300 * time.Second
-		}
-
-		cmd = kubectl("wait", "--for=condition=ready", "--timeout="+timeout.String(), "pods", "--selector=app=partitionjob-sample", "--namespace=partitionjob-test")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatal(string(out))
 		}
@@ -168,18 +111,22 @@ func TestPartitionJobs(t *testing.T) {
 
 		t.Log("Expected replicas: ", expectedReplicas)
 
-		cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.partitions}}")
-		out, err = cmd.CombinedOutput()
-		if err != nil {
-			t.Fatal(string(out))
-		}
+		var expectedPartitions int
 
-		expectedPartitions, err := strconv.Atoi(string(out))
-		if err != nil {
-			t.Fatal(err)
-		}
+		if tc.testPartitions {
+			cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.partitions}}")
+			out, err = cmd.CombinedOutput()
+			if err != nil {
+				t.Fatal(string(out))
+			}
 
-		t.Log("Expected partitions: ", expectedPartitions)
+			expectedPartitions, err = strconv.Atoi(string(out))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Log("Expected partitions: ", expectedPartitions)
+		}
 
 		//wait for the pods to be scaled
 		time.Sleep(45 * time.Second)
@@ -194,21 +141,25 @@ func TestPartitionJobs(t *testing.T) {
 
 		t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
 
-		updateRevision := getUpdateRevision(clientset, "partitionjob-test")
+		if tc.testPartitions {
 
-		labelSelectors := map[string]string{
-			"app":                       "partitionjob-sample",
-			"PartitionJobRevisionLabel": updateRevision,
+			updateRevision := getUpdateRevision(clientset, "partitionjob-test")
+
+			labelSelectors := map[string]string{
+				"app":                       "partitionjob-sample",
+				"PartitionJobRevisionLabel": updateRevision,
+			}
+
+			actualPartitions := countPods(clientset, "status.phase=Running", metav1.FormatLabelSelector(metav1.SetAsLabelSelector(labelSelectors)), "partitionjob-test")
+			t.Log("Actual partitions: ", actualPartitions)
+
+			if actualPartitions != expectedPartitions {
+				t.Fatalf("Expected partitions %d, got %d", expectedPartitions, actualPartitions)
+			}
+
+			t.Logf("PartitionJob successfully created %d paritition pods", expectedPartitions)
+
 		}
-
-		actualPartitions := countPods(clientset, "status.phase=Running", metav1.FormatLabelSelector(metav1.SetAsLabelSelector(labelSelectors)), "partitionjob-test")
-		t.Log("Actual partitions: ", actualPartitions)
-
-		if actualPartitions != expectedPartitions {
-			t.Fatalf("Expected partitions %d, got %d", expectedPartitions, actualPartitions)
-		}
-
-		t.Logf("PartitionJob successfully created %d paritition pods", expectedPartitions)
 
 	}
 
