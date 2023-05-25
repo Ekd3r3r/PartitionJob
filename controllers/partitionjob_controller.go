@@ -80,11 +80,13 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	revisionCount := len(allRevisions)
 	var currentRevision, updatedRevision *apps.ControllerRevision
 
-	if allRevisions[revisionCount-1] != nil {
+	if revisionCount > 0 && allRevisions[revisionCount-1] != nil {
+		//revision is sorted in ascending order, so the updated revision will be the last revision
 		updatedRevision = allRevisions[revisionCount-1]
 	}
 
-	if allRevisions[revisionCount-2] != nil {
+	if revisionCount > 1 && allRevisions[revisionCount-2] != nil {
+		//revision is sorted in ascending order, so the current revision will be the second to last revision
 		currentRevision = allRevisions[revisionCount-2]
 	}
 
@@ -103,12 +105,16 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		podRevision := utils.GetPodRevision(pod)
 
-		if podRevision == currentRevision.Name {
+		if currentRevision != nil && podRevision == currentRevision.Name {
 			oldRevisionPods = append(oldRevisionPods, pod)
 		}
-		if podRevision == updatedRevision.Name {
+		if updatedRevision != nil && podRevision == updatedRevision.Name {
 			newRevisionPods = append(newRevisionPods, pod)
 		}
+	}
+
+	if currentRevision == nil {
+		currentRevision = updatedRevision
 	}
 
 	observedStatus := webappv1.PartitionJobStatus{
@@ -185,7 +191,7 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
-	if partitionJob.Status.UpdatedReplicas > *partitionJob.Spec.Partitions {
+	if currentRevision != updatedRevision && partitionJob.Status.UpdatedReplicas > *partitionJob.Spec.Partitions {
 		l.Info("Scaling down new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
 		diff := partitionJob.Status.UpdatedReplicas - *partitionJob.Spec.Partitions
 		dpods := newRevisionPods[:diff]
@@ -199,7 +205,7 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		return ctrl.Result{}, nil
 
-	} else if partitionJob.Status.UpdatedReplicas < *partitionJob.Spec.Partitions {
+	} else if currentRevision != updatedRevision && partitionJob.Status.UpdatedReplicas < *partitionJob.Spec.Partitions {
 		l.Info("Scaling up new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
 		diff := *partitionJob.Spec.Partitions - partitionJob.Status.UpdatedReplicas
 		dpods := oldRevisionPods[:diff]
@@ -306,7 +312,9 @@ func (r *PartitionJobReconciler) GetRevision(ctx context.Context, partitionJob *
 	equivalentRevisions := history.FindEqualRevisions(revisions, updatedRevision)
 	equivalentCount := len(equivalentRevisions)
 
-	if equivalentCount > 0 && !history.EqualRevision(revisions[revisionCount-1], equivalentRevisions[equivalentCount-1]) {
+	if equivalentCount > 0 && history.EqualRevision(revisions[revisionCount-1], equivalentRevisions[equivalentCount-1]) {
+		return revisions, collisionCount, nil
+	} else if equivalentCount > 0 {
 		//get equivalent revision and increment the revision
 		rev := equivalentRevisions[equivalentCount-1]
 		rev.Revision = updatedRevision.Revision
