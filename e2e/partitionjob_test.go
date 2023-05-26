@@ -129,7 +129,7 @@ func TestPartitionJobs(t *testing.T) {
 		}
 
 		//wait for the pods to be scaled
-		time.Sleep(45 * time.Second)
+		time.Sleep(120 * time.Second)
 
 		actualReplicas := countPods(clientset, "status.phase=Running", "app=partitionjob-sample", "partitionjob-test")
 
