@@ -101,6 +101,11 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		currentRevision = updatedRevision
 	}
 
+	//in the case partition is greater than desired replicas
+	if *partitionJob.Spec.Partitions > partitionJob.Spec.Replicas {
+		partitionJob.Spec.Partitions = &partitionJob.Spec.Replicas
+	}
+
 	observedStatus := webappv1.PartitionJobStatus{
 		Replicas:          partitionJob.Spec.Replicas,  //desired replicas
 		AvailableReplicas: numAvailableReplicas,        //observed replicas
@@ -112,8 +117,8 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if !reflect.DeepEqual(partitionJob.Status, observedStatus) {
 		partitionJob.Status = observedStatus
-		if err := r.Status().Update(ctx, partitionJob); err != nil {
-			l.Error(err, "Failed to update PartitionJob status")
+		if err := r.Update(ctx, partitionJob); err != nil {
+			l.Error(err, "Failed to update PartitionJob")
 			return ctrl.Result{}, err
 		}
 	}
