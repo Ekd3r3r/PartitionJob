@@ -175,7 +175,7 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
-	if currentRevision != updatedRevision && partitionJob.Status.UpdatedReplicas > *partitionJob.Spec.Partitions {
+	if currentRevision != updatedRevision && partitionJob.Status.UpdatedReplicas > *partitionJob.Spec.Partitions && *partitionJob.Spec.Partitions >= 0 {
 		l.Info("Scaling down new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
 		diff := partitionJob.Status.UpdatedReplicas - *partitionJob.Spec.Partitions
 		dpods := newRevisionPods[:diff]
