@@ -88,20 +88,13 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		currentRevision = allRevisions[revisionCount-2]
 	}
 
-	//TODO
-	// if revisionCount > 2 && allRevisions[revisionCount-3] != nil {
-	// 	previousRevision = allRevisions[revisionCount-3]
-	// }
-
 	l.Info("Revision Info", "current revision:", currentRevision, "updated revision:", updatedRevision, "collision count:", collisonCount)
 
-	availableReplicas, err := utils.GetAvailablePods(r.Client, ctx, partitionJob)
+	availableReplicas, oldRevisionPods, newRevisionPods, err := utils.GetRevisionPods(r.Client, ctx, partitionJob, allRevisions)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	numAvailableReplicas := int32(len(availableReplicas))
-
-	oldRevisionPods, newRevisionPods := utils.GetRevisionPods(availableReplicas, updatedRevision, currentRevision)
 
 	// if currentRevision is not set because it is the first pass, set it equal to updatedRevision
 	if currentRevision == nil {

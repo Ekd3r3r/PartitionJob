@@ -58,7 +58,7 @@ func GetAvailablePods(r client.Client, ctx context.Context, partitionJob *webapp
 		if pod.ObjectMeta.DeletionTimestamp != nil {
 			continue
 		}
-		if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
+		if pod.Status.Phase == corev1.PodRunning {
 			availableReplicas = append(availableReplicas, &podList.Items[index])
 		}
 	}

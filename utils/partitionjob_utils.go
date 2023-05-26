@@ -47,7 +47,25 @@ func RawToTemplate(data []byte) *corev1.PodTemplateSpec {
 	return &template
 }
 
-func GetRevisionPods(availableReplicas []*corev1.Pod, updatedRevision *apps.ControllerRevision, currentRevision *apps.ControllerRevision) ([]*corev1.Pod, []*corev1.Pod) {
+func GetRevisionPods(c client.Client, ctx context.Context, partitionJob *webappv1.PartitionJob, allRevisions []*apps.ControllerRevision) ([]*corev1.Pod, []*corev1.Pod, []*corev1.Pod, error) {
+	revisionCount := len(allRevisions)
+	var currentRevision, updatedRevision *apps.ControllerRevision
+
+	if revisionCount > 0 && allRevisions[revisionCount-1] != nil {
+		//revision is sorted in ascending order, so the updated revision will be the last revision
+		updatedRevision = allRevisions[revisionCount-1]
+	}
+
+	if revisionCount > 1 && allRevisions[revisionCount-2] != nil {
+		//revision is sorted in ascending order, so the current revision will be the second to last revision
+		currentRevision = allRevisions[revisionCount-2]
+	}
+
+	availableReplicas, err := GetAvailablePods(c, ctx, partitionJob)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	oldRevisionPods := make([]*corev1.Pod, 0)
 	newRevisionPods := make([]*corev1.Pod, 0)
 
@@ -62,11 +80,8 @@ func GetRevisionPods(availableReplicas []*corev1.Pod, updatedRevision *apps.Cont
 			newRevisionPods = append(newRevisionPods, pod)
 		}
 		//TODO
-		// if previousRevision != nil && podRevision == previousRevision.Name {
-		// 	r.Delete(ctx, pod)
-		// 	numAvailableReplicas--
-		// }
+		//Delete all pods from previous revisions
 	}
 
-	return oldRevisionPods, newRevisionPods
+	return availableReplicas, oldRevisionPods, newRevisionPods, nil
 }
