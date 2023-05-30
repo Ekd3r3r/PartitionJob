@@ -6,16 +6,20 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"testing"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/scheme"
+	utils "my.domain/partitionJob/utils"
+
+	apps "k8s.io/api/apps/v1"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/kubernetes/pkg/controller/history"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 func TestPartitionJobs(t *testing.T) {
@@ -32,22 +36,25 @@ func TestPartitionJobs(t *testing.T) {
 		t.Fatal(string(out))
 	}
 
-	// Path to your kubeconfig file
-	kubeconfig := flag.String("kubeconfig", filepath.Join(os.Getenv("HOME"), ".kube", "config"), "(optional) absolute path to the kubeconfig file")
-	flag.Parse()
+	kubeconfig := flag.Lookup("kubeconfig")
+
+	if kubeconfig == nil {
+		flag.String("kubeconfig", filepath.Join(os.Getenv("HOME"), ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+	} else {
+		kubeconfig.Value.Set(filepath.Join(os.Getenv("HOME"), ".kube", "config"))
+	}
 
 	// BuildConfigFromFlags creates a Kubernetes REST client configuration
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig.Value.String())
 	if err != nil {
 		log.Fatalf("Error building kubeconfig: %v", err)
 	}
 
-	// creates the clientset
-	clientset, err := kubernetes.NewForConfig(config)
+	client, err := ctrl.New(config, ctrl.Options{})
+
 	if err != nil {
 		panic(err.Error())
 	}
-	client, err := ctrl.New(config, ctrl.Options{Scheme: scheme.Scheme})
 
 	//Test Partitions, Pod Template change and Scaling
 	cases := []struct {
@@ -116,6 +123,10 @@ func TestPartitionJobs(t *testing.T) {
 
 		var expectedPartitions int
 
+		partitionJob, _ := utils.GetPartitionJob(client, context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "partitionjob-sample", Namespace: "partitionjob-test"}})
+
+		var currentRevision, updatedRevision *apps.ControllerRevision
+
 		if tc.testPartitions {
 			cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.partitions}}")
 			out, err = cmd.CombinedOutput()
@@ -129,6 +140,30 @@ func TestPartitionJobs(t *testing.T) {
 			}
 
 			t.Log("Expected partitions: ", expectedPartitions)
+
+			allRevisions, _ := utils.ListRevisions(client, context.TODO(), partitionJob)
+
+			history.SortControllerRevisions(allRevisions)
+
+			allRevisions, _, _ = utils.GetAllRevisions(client, context.TODO(), partitionJob, allRevisions)
+
+			revisionCount := len(allRevisions)
+
+			if revisionCount > 0 && allRevisions[revisionCount-1] != nil {
+				//revision is sorted in ascending order, so the updated revision will be the last revision
+				updatedRevision = allRevisions[revisionCount-1]
+			}
+
+			if revisionCount > 1 && allRevisions[revisionCount-2] != nil {
+				//revision is sorted in ascending order, so the current revision will be the second to last revision
+				currentRevision = allRevisions[revisionCount-2]
+			}
+
+		}
+
+		// if currentRevision is not set because it is the first pass, set it equal to updatedRevision
+		if currentRevision == nil {
+			currentRevision = updatedRevision
 		}
 
 		timeout := 5 * time.Minute
@@ -138,13 +173,15 @@ func TestPartitionJobs(t *testing.T) {
 		defer ticker.Stop()
 
 		var actualReplicas int
+		var availableReplicas []*corev1.Pod
 
 		conditionMet := false
 
 		for !conditionMet {
 			select {
 			case <-ticker.C:
-				actualReplicas = countPods(clientset, "status.phase=Running", "app=partitionjob-sample", "partitionjob-test")
+				availableReplicas, _ = utils.GetAvailablePods(client, context.TODO(), partitionJob)
+				actualReplicas = len(availableReplicas)
 				conditionMet = actualReplicas == expectedReplicas
 				if conditionMet {
 					t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
@@ -158,38 +195,25 @@ func TestPartitionJobs(t *testing.T) {
 
 		if tc.testPartitions {
 
-			updateRevision := getUpdateRevision(clientset, "partitionjob-test")
-
-			labelSelectors := map[string]string{
-				"app":                       "partitionjob-sample",
-				"PartitionJobRevisionLabel": updateRevision,
-			}
+			var actualPartitions int
 
 			for !conditionMet {
 				select {
 				case <-ticker.C:
-					actualPartitions := countPods(clientset, "status.phase=Running", metav1.FormatLabelSelector(metav1.SetAsLabelSelector(labelSelectors)), "partitionjob-test")
+					_, newRevisionPods := utils.GetRevisionPods(availableReplicas, updatedRevision, currentRevision)
+					actualPartitions = len(newRevisionPods)
 					t.Log("Actual partitions: ", actualPartitions)
 
-					conditionMet = actualReplicas == expectedReplicas
+					conditionMet = actualPartitions == expectedPartitions
 					if conditionMet {
-						t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
+						t.Logf("PartitionJob successfully created %d paritition pods", expectedPartitions)
 
 					}
 
 				case <-time.After(timeout):
-					t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
+					t.Fatalf("Expected partitions %d, got %d", expectedPartitions, actualPartitions)
 				}
 			}
-
-			actualPartitions := countPods(clientset, "status.phase=Running", metav1.FormatLabelSelector(metav1.SetAsLabelSelector(labelSelectors)), "partitionjob-test")
-			t.Log("Actual partitions: ", actualPartitions)
-
-			if actualPartitions != expectedPartitions {
-				t.Fatalf("Expected partitions %d, got %d", expectedPartitions, actualPartitions)
-			}
-
-			t.Logf("PartitionJob successfully created %d paritition pods", expectedPartitions)
 
 		}
 
@@ -203,27 +227,27 @@ func TestPartitionJobs(t *testing.T) {
 
 }
 
-func countPods(clientset *kubernetes.Clientset, fieldSelector string, labelSelectors string, namespace string) int {
-	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{LabelSelector: labelSelectors, FieldSelector: fieldSelector})
-	if err != nil {
-		panic(err.Error())
-	}
+// func countPods(clientset *kubernetes.Clientset, fieldSelector string, labelSelectors string, namespace string) int {
+// 	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{LabelSelector: labelSelectors, FieldSelector: fieldSelector})
+// 	if err != nil {
+// 		panic(err.Error())
+// 	}
 
-	return len(pods.Items)
-}
+// 	return len(pods.Items)
+// }
 
-func getUpdateRevision(clientset *kubernetes.Clientset, namespace string) string {
-	controllerRevisions, err := clientset.AppsV1().ControllerRevisions(namespace).List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		panic(err.Error())
-	}
+// func getUpdateRevision(clientset *kubernetes.Clientset, namespace string) string {
+// 	controllerRevisions, err := clientset.AppsV1().ControllerRevisions(namespace).List(context.Background(), metav1.ListOptions{})
+// 	if err != nil {
+// 		panic(err.Error())
+// 	}
 
-	// Sort the ControllerRevisions by revision number in descending order
-	sort.SliceStable(controllerRevisions.Items, func(i, j int) bool {
-		return controllerRevisions.Items[i].Revision > controllerRevisions.Items[j].Revision
-	})
+// 	// Sort the ControllerRevisions by revision number in descending order
+// 	sort.SliceStable(controllerRevisions.Items, func(i, j int) bool {
+// 		return controllerRevisions.Items[i].Revision > controllerRevisions.Items[j].Revision
+// 	})
 
-	// Get the ControllerRevision with the highest revision number
-	return controllerRevisions.Items[0].Name
+// 	// Get the ControllerRevision with the highest revision number
+// 	return controllerRevisions.Items[0].Name
 
-}
+// }
