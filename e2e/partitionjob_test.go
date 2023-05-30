@@ -10,16 +10,19 @@ import (
 	"testing"
 	"time"
 
-	utils "my.domain/partitionJob/utils"
-
 	apps "k8s.io/api/apps/v1"
-
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/kubernetes/pkg/controller/history"
+	webappv1 "my.domain/partitionJob/api/v1"
+	utils "my.domain/partitionJob/utils"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
 
 func TestPartitionJobs(t *testing.T) {
@@ -50,7 +53,13 @@ func TestPartitionJobs(t *testing.T) {
 		log.Fatalf("Error building kubeconfig: %v", err)
 	}
 
-	client, err := ctrl.New(config, ctrl.Options{})
+	scheme := runtime.NewScheme()
+
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+
+	utilruntime.Must(webappv1.AddToScheme(scheme))
+
+	client, err := ctrl.New(config, ctrl.Options{Scheme: scheme})
 
 	if err != nil {
 		panic(err.Error())
@@ -123,9 +132,32 @@ func TestPartitionJobs(t *testing.T) {
 
 		var expectedPartitions int
 
-		partitionJob, _ := utils.GetPartitionJob(client, context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "partitionjob-sample", Namespace: "partitionjob-test"}})
+		var partitionJob *webappv1.PartitionJob
 
-		var currentRevision, updatedRevision *apps.ControllerRevision
+		timeout := 5 * time.Minute
+
+		ticker := time.NewTicker(10 * time.Second)
+
+		defer ticker.Stop()
+
+		conditionMet := false
+
+		for !conditionMet {
+			select {
+			case <-ticker.C:
+				partitionJob, _ = utils.GetPartitionJob(client, context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "partitionjob-sample", Namespace: "partitionjob-test"}})
+				conditionMet = partitionJob != nil
+				if conditionMet {
+					t.Logf("PartitionJob %s is successfully created", partitionJob.Name)
+
+				}
+
+			case <-time.After(timeout):
+				t.Fatalf("Cannot create PartitionJob %s ", partitionJob.Name)
+			}
+		}
+
+		var allRevisions []*apps.ControllerRevision
 
 		if tc.testPartitions {
 			cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.partitions}}")
@@ -141,46 +173,20 @@ func TestPartitionJobs(t *testing.T) {
 
 			t.Log("Expected partitions: ", expectedPartitions)
 
-			allRevisions, _ := utils.ListRevisions(client, context.TODO(), partitionJob)
+			allRevisions, _ = utils.ListRevisions(client, context.TODO(), partitionJob)
 
 			history.SortControllerRevisions(allRevisions)
 
 			allRevisions, _, _ = utils.GetAllRevisions(client, context.TODO(), partitionJob, allRevisions)
-
-			revisionCount := len(allRevisions)
-
-			if revisionCount > 0 && allRevisions[revisionCount-1] != nil {
-				//revision is sorted in ascending order, so the updated revision will be the last revision
-				updatedRevision = allRevisions[revisionCount-1]
-			}
-
-			if revisionCount > 1 && allRevisions[revisionCount-2] != nil {
-				//revision is sorted in ascending order, so the current revision will be the second to last revision
-				currentRevision = allRevisions[revisionCount-2]
-			}
-
 		}
-
-		// if currentRevision is not set because it is the first pass, set it equal to updatedRevision
-		if currentRevision == nil {
-			currentRevision = updatedRevision
-		}
-
-		timeout := 5 * time.Minute
-
-		ticker := time.NewTicker(10 * time.Second)
-
-		defer ticker.Stop()
 
 		var actualReplicas int
 		var availableReplicas []*corev1.Pod
 
-		conditionMet := false
-
 		for !conditionMet {
 			select {
 			case <-ticker.C:
-				availableReplicas, _ = utils.GetAvailablePods(client, context.TODO(), partitionJob)
+				availableReplicas, _ = utils.GetAvailablePods(client, context.Background(), partitionJob)
 				actualReplicas = len(availableReplicas)
 				conditionMet = actualReplicas == expectedReplicas
 				if conditionMet {
@@ -200,7 +206,7 @@ func TestPartitionJobs(t *testing.T) {
 			for !conditionMet {
 				select {
 				case <-ticker.C:
-					_, newRevisionPods := utils.GetRevisionPods(availableReplicas, updatedRevision, currentRevision)
+					_, _, newRevisionPods, _ := utils.GetRevisionPods(client, context.Background(), partitionJob, allRevisions)
 					actualPartitions = len(newRevisionPods)
 					t.Log("Actual partitions: ", actualPartitions)
 
@@ -226,28 +232,3 @@ func TestPartitionJobs(t *testing.T) {
 	}
 
 }
-
-// func countPods(clientset *kubernetes.Clientset, fieldSelector string, labelSelectors string, namespace string) int {
-// 	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{LabelSelector: labelSelectors, FieldSelector: fieldSelector})
-// 	if err != nil {
-// 		panic(err.Error())
-// 	}
-
-// 	return len(pods.Items)
-// }
-
-// func getUpdateRevision(clientset *kubernetes.Clientset, namespace string) string {
-// 	controllerRevisions, err := clientset.AppsV1().ControllerRevisions(namespace).List(context.Background(), metav1.ListOptions{})
-// 	if err != nil {
-// 		panic(err.Error())
-// 	}
-
-// 	// Sort the ControllerRevisions by revision number in descending order
-// 	sort.SliceStable(controllerRevisions.Items, func(i, j int) bool {
-// 		return controllerRevisions.Items[i].Revision > controllerRevisions.Items[j].Revision
-// 	})
-
-// 	// Get the ControllerRevision with the highest revision number
-// 	return controllerRevisions.Items[0].Name
-
-// }
