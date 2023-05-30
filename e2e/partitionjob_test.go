@@ -13,7 +13,9 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
+	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func TestPartitionJobs(t *testing.T) {
@@ -45,6 +47,7 @@ func TestPartitionJobs(t *testing.T) {
 	if err != nil {
 		panic(err.Error())
 	}
+	client, err := ctrl.New(config, ctrl.Options{Scheme: scheme.Scheme})
 
 	//Test Partitions, Pod Template change and Scaling
 	cases := []struct {
@@ -128,18 +131,30 @@ func TestPartitionJobs(t *testing.T) {
 			t.Log("Expected partitions: ", expectedPartitions)
 		}
 
-		//wait for the pods to be scaled
-		time.Sleep(120 * time.Second)
+		timeout := 5 * time.Minute
 
-		actualReplicas := countPods(clientset, "status.phase=Running", "app=partitionjob-sample", "partitionjob-test")
+		ticker := time.NewTicker(10 * time.Second)
 
-		t.Log("Actual replicas: ", actualReplicas)
+		defer ticker.Stop()
 
-		if actualReplicas != expectedReplicas {
-			t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
+		var actualReplicas int
+
+		conditionMet := false
+
+		for !conditionMet {
+			select {
+			case <-ticker.C:
+				actualReplicas = countPods(clientset, "status.phase=Running", "app=partitionjob-sample", "partitionjob-test")
+				conditionMet = actualReplicas == expectedReplicas
+				if conditionMet {
+					t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
+
+				}
+
+			case <-time.After(timeout):
+				t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
+			}
 		}
-
-		t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
 
 		if tc.testPartitions {
 
@@ -148,6 +163,23 @@ func TestPartitionJobs(t *testing.T) {
 			labelSelectors := map[string]string{
 				"app":                       "partitionjob-sample",
 				"PartitionJobRevisionLabel": updateRevision,
+			}
+
+			for !conditionMet {
+				select {
+				case <-ticker.C:
+					actualPartitions := countPods(clientset, "status.phase=Running", metav1.FormatLabelSelector(metav1.SetAsLabelSelector(labelSelectors)), "partitionjob-test")
+					t.Log("Actual partitions: ", actualPartitions)
+
+					conditionMet = actualReplicas == expectedReplicas
+					if conditionMet {
+						t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
+
+					}
+
+				case <-time.After(timeout):
+					t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
+				}
 			}
 
 			actualPartitions := countPods(clientset, "status.phase=Running", metav1.FormatLabelSelector(metav1.SetAsLabelSelector(labelSelectors)), "partitionjob-test")
