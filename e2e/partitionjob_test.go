@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -14,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/kubernetes/pkg/controller/history"
 	webappv1 "my.domain/partitionJob/api/v1"
 	utils "my.domain/partitionJob/utils"
@@ -22,22 +24,11 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
 
 func TestPartitionJobs(t *testing.T) {
-
-	// delete the namespace if it already exists
-	cmd := kubectl("delete", "namespace", "partitionjob-test", "--ignore-not-found")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatal(string(out))
-	}
-
-	// create namespace
-	cmd = kubectl("apply", "-f", "fixtures/namespace.yaml")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatal(string(out))
-	}
 
 	kubeconfig := flag.Lookup("kubeconfig")
 
@@ -72,11 +63,6 @@ func TestPartitionJobs(t *testing.T) {
 		testPartitions  bool
 	}{
 		{
-			description:     "Deploying PartitionJob",
-			fixtureFilePath: "fixtures/partitionjob_deploy.yaml",
-			testPartitions:  false,
-		},
-		{
 			description:     "Scaling up PartitionJob",
 			fixtureFilePath: "fixtures/partitionjob_scale_up.yaml",
 			testPartitions:  false,
@@ -85,11 +71,6 @@ func TestPartitionJobs(t *testing.T) {
 			description:     "Scaling down PartitionJob",
 			fixtureFilePath: "fixtures/partitionjob_scale_down.yaml",
 			testPartitions:  false,
-		},
-		{
-			description:     "Change Pod Template",
-			fixtureFilePath: "fixtures/partitionjob_deploy_pod_template_change.yaml",
-			testPartitions:  true,
 		},
 		{
 			description:     "Scaling up PartitionJob with Partition",
@@ -101,14 +82,38 @@ func TestPartitionJobs(t *testing.T) {
 			fixtureFilePath: "fixtures/partitionjob_scale_down_with_partition.yaml",
 			testPartitions:  true,
 		},
-		// {
-		// 	description:     "Partition greater than number of replicas",
-		// 	fixtureFilePath: "fixtures/partitionjob_scale_partition_greaterthan_replicas.yaml",
-		// testPartitions: true,
-		// },
+		{
+			description:     "Partition greater than number of replicas",
+			fixtureFilePath: "fixtures/partitionjob_scale_partition_greaterthan_replicas.yaml",
+			testPartitions:  true,
+		},
 	}
 
 	for _, tc := range cases {
+
+		// delete the namespace if it already exists
+		cmd := kubectl("delete", "namespace", "partitionjob-test", "--ignore-not-found")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatal(string(out))
+		}
+
+		// create namespace
+		cmd = kubectl("apply", "-f", "fixtures/namespace.yaml")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatal(string(out))
+		}
+
+		if tc.testPartitions {
+			cmd = kubectl("apply", "-f", "fixtures/partitionjob_deploy_pod_template_change.yaml")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatal(string(out))
+			}
+		} else {
+			cmd = kubectl("apply", "-f", "fixtures/partitionjob_deploy.yaml")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatal(string(out))
+			}
+		}
 
 		t.Log(tc.description)
 
@@ -134,30 +139,29 @@ func TestPartitionJobs(t *testing.T) {
 
 		var partitionJob *webappv1.PartitionJob
 
-		timeout := 5 * time.Minute
-
-		ticker := time.NewTicker(10 * time.Second)
-
-		defer ticker.Stop()
-
-		conditionMet := false
-
-		for !conditionMet {
-			select {
-			case <-ticker.C:
-				partitionJob, _ = utils.GetPartitionJob(client, context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "partitionjob-sample", Namespace: "partitionjob-test"}})
-				conditionMet = partitionJob != nil
-				if conditionMet {
-					t.Logf("PartitionJob %s is successfully created", partitionJob.Name)
-
-				}
-
-			case <-time.After(timeout):
-				t.Fatalf("Cannot create PartitionJob %s ", partitionJob.Name)
-			}
+		setupBackoff := wait.Backoff{
+			Steps:    50,
+			Duration: time.Second * 10,
+			Factor:   0,
+			Jitter:   0.1,
 		}
 
-		var allRevisions []*apps.ControllerRevision
+		err = retry.OnError(setupBackoff,
+			func(err error) bool {
+				return true
+			}, func() error {
+				partitionJob, err = utils.GetPartitionJob(client, context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "partitionjob-sample", Namespace: "partitionjob-test"}})
+				if err != nil {
+					t.Logf("Unable to obtain PartitionJob resource %s. Retrying", partitionJob.Name)
+					return err
+				}
+				t.Logf("PartitionJob %s is successfully created", partitionJob.Name)
+				return nil
+			})
+
+		if err != nil {
+			t.Fatalf("Cannot create PartitionJob %s ", partitionJob.Name)
+		}
 
 		if tc.testPartitions {
 			cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.partitions}}")
@@ -167,68 +171,91 @@ func TestPartitionJobs(t *testing.T) {
 			}
 
 			expectedPartitions, err = strconv.Atoi(string(out))
+			if expectedPartitions > expectedReplicas {
+				expectedPartitions = expectedReplicas
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			t.Log("Expected partitions: ", expectedPartitions)
 
-			allRevisions, _ = utils.ListRevisions(client, context.TODO(), partitionJob)
-
-			history.SortControllerRevisions(allRevisions)
-
-			allRevisions, _, _ = utils.GetAllRevisions(client, context.TODO(), partitionJob, allRevisions)
 		}
 
 		var actualReplicas int
 		var availableReplicas []*corev1.Pod
 
-		for !conditionMet {
-			select {
-			case <-ticker.C:
-				availableReplicas, _ = utils.GetAvailablePods(client, context.Background(), partitionJob)
-				actualReplicas = len(availableReplicas)
-				conditionMet = actualReplicas == expectedReplicas
-				if conditionMet {
-					t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
+		err = retry.OnError(setupBackoff,
+			func(err error) bool {
+				return true
+			}, func() error {
+				var allRevisions []*apps.ControllerRevision
 
+				allRevisions, _ = utils.ListRevisions(client, context.TODO(), partitionJob)
+
+				history.SortControllerRevisions(allRevisions)
+
+				allRevisions, _, _ = utils.GetAllRevisions(client, context.TODO(), partitionJob, allRevisions)
+
+				availableReplicas, _, _, err = utils.GetRevisionPods(client, context.Background(), partitionJob, allRevisions)
+				if err != nil {
+					t.Logf("Unable to obtain Available Replicas. Retrying")
+					return err
+				} else if len(availableReplicas) != expectedReplicas {
+					t.Logf("Expected replicas %d, got %d. Retrying", expectedReplicas, len(availableReplicas))
+					return errors.New("replicas not ready")
 				}
 
-			case <-time.After(timeout):
-				t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
-			}
+				t.Logf("PartitionJob successfully created %d pod replicas", expectedReplicas)
+				return nil
+			})
+
+		if err != nil {
+			t.Fatalf("Expected replicas %d, got %d", expectedReplicas, actualReplicas)
 		}
 
 		if tc.testPartitions {
-
+			var newRevisionPods []*corev1.Pod
 			var actualPartitions int
 
-			for !conditionMet {
-				select {
-				case <-ticker.C:
-					_, _, newRevisionPods, _ := utils.GetRevisionPods(client, context.Background(), partitionJob, allRevisions)
+			err = retry.OnError(setupBackoff,
+				func(err error) bool {
+					return true
+				}, func() error {
+					var allRevisions []*apps.ControllerRevision
+
+					allRevisions, _ = utils.ListRevisions(client, context.TODO(), partitionJob)
+
+					history.SortControllerRevisions(allRevisions)
+
+					allRevisions, _, _ = utils.GetAllRevisions(client, context.TODO(), partitionJob, allRevisions)
+
+					_, _, newRevisionPods, err = utils.GetRevisionPods(client, context.Background(), partitionJob, allRevisions)
 					actualPartitions = len(newRevisionPods)
-					t.Log("Actual partitions: ", actualPartitions)
 
-					conditionMet = actualPartitions == expectedPartitions
-					if conditionMet {
-						t.Logf("PartitionJob successfully created %d paritition pods", expectedPartitions)
-
+					if err != nil {
+						t.Logf("Unable to obtain partition pods. Retrying")
+						return err
+					} else if actualPartitions != expectedPartitions {
+						t.Logf("Expected partitions %d, got %d. Retrying", expectedPartitions, actualPartitions)
+						return errors.New("partitions not ready")
 					}
 
-				case <-time.After(timeout):
-					t.Fatalf("Expected partitions %d, got %d", expectedPartitions, actualPartitions)
-				}
-			}
+					t.Logf("PartitionJob successfully created %d paritition pods", expectedPartitions)
+					return nil
+				})
 
+			if err != nil {
+				t.Fatalf("Expected partitions %d, got %d", expectedPartitions, actualPartitions)
+			}
 		}
 
-	}
+		t.Log("Cleaning up PartitionJob")
+		cmd = kubectl("delete", "namespace", "partitionjob-test", "--ignore-not-found")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatal(string(out))
+		}
 
-	t.Log("Cleaning up PartitionJob")
-	cmd = kubectl("delete", "namespace", "partitionjob-test", "--ignore-not-found")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatal(string(out))
 	}
 
 }
