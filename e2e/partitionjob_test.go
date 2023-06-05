@@ -251,6 +251,17 @@ func TestPartitionJobs(t *testing.T) {
 		}
 
 		t.Log("Cleaning up PartitionJob")
+
+		cmd = kubectl("delete", "partitionjob", "partitionjob-sample", "-n", "partitionjob-test", "--ignore-not-found")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatal(string(out))
+		}
+
+		cmd = kubectl("delete", "all", "--all", "-n", "partitionjob-test", "--ignore-not-found")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatal(string(out))
+		}
+
 		cmd = kubectl("delete", "namespace", "partitionjob-test", "--ignore-not-found")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatal(string(out))
