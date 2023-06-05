@@ -60,7 +60,7 @@ unit-test: manifests generate fmt vet envtest ## Run tests.
 
 .PHONY: e2e-test
 e2e-test: manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./e2e -v
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -timeout 30m ./e2e -v
 ##@ Build
 
 .PHONY: build

@@ -11,6 +11,7 @@ import (
 	webappv1 "my.domain/partitionJob/api/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // GetPartitionJob retrieves the current resource instance of PartitionJob
@@ -61,6 +62,11 @@ func GetRevisionPods(c client.Client, ctx context.Context, partitionJob *webappv
 		currentRevision = allRevisions[revisionCount-2]
 	}
 
+	// if currentRevision is not set because it is the first pass, set it equal to updatedRevision
+	if currentRevision == nil {
+		currentRevision = updatedRevision
+	}
+
 	availableReplicas, err := GetAvailablePods(c, ctx, partitionJob)
 	if err != nil {
 		return nil, nil, nil, err
@@ -68,6 +74,7 @@ func GetRevisionPods(c client.Client, ctx context.Context, partitionJob *webappv
 
 	oldRevisionPods := make([]*corev1.Pod, 0)
 	newRevisionPods := make([]*corev1.Pod, 0)
+	availablePods := make([]*corev1.Pod, 0)
 
 	for _, pod := range availableReplicas {
 
@@ -75,13 +82,16 @@ func GetRevisionPods(c client.Client, ctx context.Context, partitionJob *webappv
 
 		if currentRevision != nil && podRevision == currentRevision.Name {
 			oldRevisionPods = append(oldRevisionPods, pod)
-		}
-		if updatedRevision != nil && podRevision == updatedRevision.Name {
+			availablePods = append(availablePods, pod)
+		} else if updatedRevision != nil && podRevision == updatedRevision.Name {
 			newRevisionPods = append(newRevisionPods, pod)
+			availablePods = append(availablePods, pod)
+		} else {
+			err = c.Delete(ctx, pod)
+			if err != nil {
+				log.FromContext(ctx).Error(err, "Failed to delete pod", "pod.name", pod.Name)
+			}
 		}
-		//TODO
-		//Delete all pods from previous revisions
 	}
-
-	return availableReplicas, oldRevisionPods, newRevisionPods, nil
+	return availablePods, oldRevisionPods, newRevisionPods, nil
 }

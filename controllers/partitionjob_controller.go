@@ -90,16 +90,36 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	l.Info("Revision Info", "current revision:", currentRevision, "updated revision:", updatedRevision, "collision count:", collisonCount)
 
+	// if currentRevision is not set because it is the first pass, set it equal to updatedRevision
+	if currentRevision == nil {
+		currentRevision = updatedRevision
+	}
+
+	var currentRevisionName string
+
+	var updatedRevisionName string
+
+	var updatedRevisionData []byte
+
+	var currentRevisionData []byte
+
+	if currentRevision == nil {
+		currentRevisionName = ""
+		updatedRevisionName = ""
+		updatedRevisionData = nil
+		currentRevisionData = nil
+	} else {
+		currentRevisionName = currentRevision.Name
+		updatedRevisionName = updatedRevision.Name
+		updatedRevisionData = updatedRevision.Data.Raw
+		currentRevisionData = currentRevision.Data.Raw
+	}
+
 	availableReplicas, oldRevisionPods, newRevisionPods, err := utils.GetRevisionPods(r.Client, ctx, partitionJob, allRevisions)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	numAvailableReplicas := int32(len(availableReplicas))
-
-	// if currentRevision is not set because it is the first pass, set it equal to updatedRevision
-	if currentRevision == nil {
-		currentRevision = updatedRevision
-	}
 
 	//in the case partition is greater than desired replicas
 	if *partitionJob.Spec.Partitions > partitionJob.Spec.Replicas {
@@ -111,13 +131,13 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		AvailableReplicas: numAvailableReplicas,        //observed replicas
 		CurrentReplicas:   int32(len(oldRevisionPods)), //current replicas
 		UpdatedReplicas:   int32(len(newRevisionPods)), //updated replicas
-		CurrentRevision:   currentRevision.Name,        //current revision
-		UpdateRevision:    updatedRevision.Name,        //update revision
+		CurrentRevision:   currentRevisionName,         //current revision
+		UpdateRevision:    updatedRevisionName,         //update revision
 	}
 
 	if !reflect.DeepEqual(partitionJob.Status, observedStatus) {
 		partitionJob.Status = observedStatus
-		if err := r.Update(ctx, partitionJob); err != nil {
+		if err := r.Status().Update(ctx, partitionJob); err != nil {
 			l.Error(err, "Failed to update PartitionJob")
 			return ctrl.Result{}, err
 		}
@@ -132,15 +152,19 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		for i := 1; i <= int(numPodsToBeDeleted); i++ {
 			var dpod *corev1.Pod
 			if diff > 0 {
-				dpod = newRevisionPods[len(newRevisionPods)-i]
+				if len(newRevisionPods) >= i {
+					dpod = newRevisionPods[len(newRevisionPods)-i]
+				}
 				diff--
-			} else {
+			} else if len(oldRevisionPods) >= i {
 				dpod = oldRevisionPods[len(oldRevisionPods)-i]
 			}
 
-			if err = r.Delete(ctx, dpod); err != nil {
-				l.Error(err, "Failed to delete pod", "pod.name", dpod.Name)
-				return ctrl.Result{}, err
+			if dpod != nil {
+				if err = r.Delete(ctx, dpod); err != nil {
+					l.Error(err, "Failed to delete pod", "pod.name", dpod.Name)
+					return ctrl.Result{}, err
+				}
 			}
 		}
 
@@ -152,19 +176,20 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		diff := *partitionJob.Spec.Partitions - partitionJob.Status.UpdatedReplicas
 
 		var pod *corev1.Pod
+		if updatedRevisionData != nil {
+			if diff > 0 {
+				//create pod with new revision
+				template := utils.RawToTemplate(updatedRevisionData)
+				pod = utils.CreateNewPod(partitionJob, template)
 
-		if diff > 0 {
-			//create pod with new revision
-			template := utils.RawToTemplate(updatedRevision.Data.Raw)
-			pod = utils.CreateNewPod(partitionJob, template)
+				utils.SetPodRevision(pod, updatedRevisionName)
+			} else {
+				//create pod with old revision
+				template := utils.RawToTemplate(currentRevisionData)
+				pod = utils.CreateNewPod(partitionJob, template)
 
-			utils.SetPodRevision(pod, updatedRevision.Name)
-		} else {
-			//create pod with old revision
-			template := utils.RawToTemplate(currentRevision.Data.Raw)
-			pod = utils.CreateNewPod(partitionJob, template)
-
-			utils.SetPodRevision(pod, currentRevision.Name)
+				utils.SetPodRevision(pod, currentRevisionName)
+			}
 		}
 
 		// Set partitionJob instance as the owner and controller
@@ -197,28 +222,36 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	} else if currentRevision != updatedRevision && partitionJob.Status.UpdatedReplicas < *partitionJob.Spec.Partitions {
 		l.Info("Scaling up new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
 		diff := *partitionJob.Spec.Partitions - partitionJob.Status.UpdatedReplicas
-		dpods := oldRevisionPods[:diff]
+
+		var dpods []*corev1.Pod
+		if int32(len(oldRevisionPods)) < diff {
+			dpods = oldRevisionPods
+		} else {
+			dpods = oldRevisionPods[:diff]
+		}
+
 		for _, dpod := range dpods {
 			err = r.Delete(ctx, dpod)
 			if err != nil {
 				l.Error(err, "Failed to delete pod", "pod.name", dpod.Name)
 				return ctrl.Result{}, err
 			}
+			if updatedRevisionData != nil {
+				// Define a new Pod object
+				template := utils.RawToTemplate(updatedRevisionData)
+				pod := utils.CreateNewPod(partitionJob, template)
 
-			// Define a new Pod object
-			template := utils.RawToTemplate(updatedRevision.Data.Raw)
-			pod := utils.CreateNewPod(partitionJob, template)
+				utils.SetPodRevision(pod, updatedRevisionName)
+				// Set partitionJob instance as the owner and controller
+				if err := controllerutil.SetControllerReference(partitionJob, pod, r.Scheme); err != nil {
+					return ctrl.Result{}, err
+				}
 
-			utils.SetPodRevision(pod, updatedRevision.Name)
-			// Set partitionJob instance as the owner and controller
-			if err := controllerutil.SetControllerReference(partitionJob, pod, r.Scheme); err != nil {
-				return ctrl.Result{}, err
-			}
-
-			err = r.Create(ctx, pod)
-			if err != nil {
-				l.Error(err, "Failed to create pod", "pod.name", pod.Name)
-				return ctrl.Result{}, err
+				err = r.Create(ctx, pod)
+				if err != nil {
+					l.Error(err, "Failed to create pod", "pod.name", pod.Name)
+					return ctrl.Result{}, err
+				}
 			}
 
 		}
