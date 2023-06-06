@@ -71,11 +71,11 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	history.SortControllerRevisions(allRevisions)
 
 	allRevisions, collisonCount, err := utils.GetAllRevisions(r.Client, ctx, partitionJob, allRevisions)
-	if err != nil {
+	revisionCount := len(allRevisions)
+	if err != nil || revisionCount == 0 {
 		return ctrl.Result{}, err
 	}
 
-	revisionCount := len(allRevisions)
 	var currentRevision, updatedRevision *apps.ControllerRevision
 
 	if revisionCount > 0 && allRevisions[revisionCount-1] != nil {
