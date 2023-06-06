@@ -34,8 +34,13 @@ jobs:
         with:
           resource-group: '${{ env.RESOURCE_GROUP }}' 
           cluster-name: '${{ env.CLUSTER_NAME }}'
-          admin: 'false'
-          use-kubelogin: 'true'
+
+      - name: Get kubeconfig
+        id: kubeconfig
+        run: |
+          KUBECONFIG_PATH="/home/runner/.kube/config"
+          az aks get-credentials --resource-group ${{ env.RESOURCE_GROUP }} --name {{ env.CLUSTER_NAME }} --file "$KUBECONFIG_PATH"
+          echo "::set-output name=kubeconfig::$KUBECONFIG_PATH"
 
       - name: Set up Go
         uses: actions/setup-go@v2
