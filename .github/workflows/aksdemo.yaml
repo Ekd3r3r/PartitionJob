@@ -44,6 +44,10 @@ jobs:
         id: install-kubectl
         uses: azure/setup-kubectl@v3
 
+      - name: Make undeploy
+        run: |
+          make undeploy
+
       - name: Install CRD and Controller
         run: |
           helm install partitionjob ./chart
