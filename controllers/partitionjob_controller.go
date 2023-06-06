@@ -88,12 +88,12 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		currentRevision = allRevisions[revisionCount-2]
 	}
 
-	l.Info("Revision Info", "current revision:", currentRevision, "updated revision:", updatedRevision, "collision count:", collisonCount)
-
 	// if currentRevision is not set because it is the first pass, set it equal to updatedRevision
 	if currentRevision == nil {
 		currentRevision = updatedRevision
 	}
+
+	l.Info("Revision Info", "current revision:", currentRevision, "updated revision:", updatedRevision, "collision count:", collisonCount)
 
 	availableReplicas, oldRevisionPods, newRevisionPods, err := utils.GetRevisionPods(r.Client, ctx, partitionJob, allRevisions)
 	if err != nil {
@@ -133,10 +133,13 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		numPodsToBeDeleted := numAvailableReplicas - partitionJob.Spec.Replicas
 		diff := partitionJob.Status.UpdatedReplicas - *partitionJob.Spec.Partitions
 
+		newUpdatedReplicas := partitionJob.Status.UpdatedReplicas
+
 		for i := 1; i <= int(numPodsToBeDeleted); i++ {
 			var dpod *corev1.Pod
 			if diff > 0 {
 				dpod = newRevisionPods[len(newRevisionPods)-i]
+				newUpdatedReplicas--
 				diff--
 			} else {
 				dpod = oldRevisionPods[len(oldRevisionPods)-i]
@@ -149,6 +152,14 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		}
 
+		patch := client.MergeFrom(partitionJob.DeepCopy())
+		partitionJob.Status.UpdatedReplicas = newUpdatedReplicas
+
+		if err := r.Status().Patch(ctx, partitionJob, patch); err != nil {
+			l.Error(err, "Failed to update PartitionJob status")
+			return ctrl.Result{}, err
+		}
+
 		return ctrl.Result{}, nil
 	}
 
@@ -156,11 +167,14 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		l.Info("Scaling up pods", "Currently available", numAvailableReplicas, "Required replicas", partitionJob.Spec.Replicas)
 		diff := *partitionJob.Spec.Partitions - partitionJob.Status.UpdatedReplicas
 
+		newUpdatedReplicas := partitionJob.Status.UpdatedReplicas
+
 		var pod *corev1.Pod
 		if diff > 0 {
 			//create pod with new revision
 			template := utils.RawToTemplate(updatedRevision.Data.Raw)
 			pod = utils.CreateNewPod(partitionJob, template)
+			newUpdatedReplicas++
 
 			utils.SetPodRevision(pod, updatedRevision.Name)
 		} else {
@@ -181,12 +195,23 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			l.Error(err, "Failed to create pod", "pod.name", pod.Name)
 			return ctrl.Result{}, err
 		}
+		if diff > 0 {
+
+			patch := client.MergeFrom(partitionJob.DeepCopy())
+			partitionJob.Status.UpdatedReplicas = newUpdatedReplicas
+			if err := r.Status().Patch(ctx, partitionJob, patch); err != nil {
+				l.Error(err, "Failed to update PartitionJob status")
+				return ctrl.Result{}, err
+			}
+		}
+
 		return ctrl.Result{}, nil
 	}
 
 	if currentRevision != updatedRevision && partitionJob.Status.UpdatedReplicas > *partitionJob.Spec.Partitions && *partitionJob.Spec.Partitions >= 0 {
 		l.Info("Scaling down new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
 		diff := partitionJob.Status.UpdatedReplicas - *partitionJob.Spec.Partitions
+		newUpdatedReplicas := partitionJob.Status.UpdatedReplicas
 		dpods := newRevisionPods[:diff]
 		for _, dpod := range dpods {
 			err = r.Delete(ctx, dpod)
@@ -194,6 +219,16 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				l.Error(err, "Failed to delete pod", "pod.name", dpod.Name)
 				return ctrl.Result{}, err
 			}
+
+			newUpdatedReplicas--
+		}
+
+		patch := client.MergeFrom(partitionJob.DeepCopy())
+		partitionJob.Status.UpdatedReplicas = newUpdatedReplicas
+
+		if err := r.Status().Patch(ctx, partitionJob, patch); err != nil {
+			l.Error(err, "Failed to update PartitionJob status")
+			return ctrl.Result{}, err
 		}
 
 		return ctrl.Result{}, nil
@@ -201,6 +236,8 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	} else if currentRevision != updatedRevision && partitionJob.Status.UpdatedReplicas < *partitionJob.Spec.Partitions {
 		l.Info("Scaling up new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
 		diff := *partitionJob.Spec.Partitions - partitionJob.Status.UpdatedReplicas
+
+		newUpdatedReplicas := partitionJob.Status.UpdatedReplicas
 
 		dpods := oldRevisionPods[:diff]
 		for _, dpod := range dpods {
@@ -226,7 +263,17 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				return ctrl.Result{}, err
 			}
 
+			newUpdatedReplicas++
+
 		}
+
+		patch := client.MergeFrom(partitionJob.DeepCopy())
+		partitionJob.Status.UpdatedReplicas = newUpdatedReplicas
+		if err := r.Status().Patch(ctx, partitionJob, patch); err != nil {
+			l.Error(err, "Failed to update PartitionJob status")
+			return ctrl.Result{}, err
+		}
+
 		return ctrl.Result{}, nil
 	}
 

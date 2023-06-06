@@ -118,6 +118,8 @@ func GetAllRevisions(r client.Client, ctx context.Context, partitionJob *webappv
 
 				collisionCount++
 			}
+
+			return nil, collisionCount, err
 		}
 	}
 
