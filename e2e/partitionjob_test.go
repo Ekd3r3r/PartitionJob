@@ -191,7 +191,11 @@ func TestPartitionJobs(t *testing.T) {
 			}, func() error {
 				var allRevisions []*apps.ControllerRevision
 
-				allRevisions, _ = utils.ListRevisions(client, context.TODO(), partitionJob)
+				allRevisions, err = utils.ListRevisions(client, context.TODO(), partitionJob)
+				if err != nil {
+					t.Logf("Unable to obtain Revisions. Retrying")
+					return err
+				}
 
 				history.SortControllerRevisions(allRevisions)
 
@@ -224,7 +228,12 @@ func TestPartitionJobs(t *testing.T) {
 				}, func() error {
 					var allRevisions []*apps.ControllerRevision
 
-					allRevisions, _ = utils.ListRevisions(client, context.TODO(), partitionJob)
+					allRevisions, err = utils.ListRevisions(client, context.TODO(), partitionJob)
+
+					if err != nil {
+						t.Logf("Unable to obtain Revisions. Retrying")
+						return err
+					}
 
 					history.SortControllerRevisions(allRevisions)
 
