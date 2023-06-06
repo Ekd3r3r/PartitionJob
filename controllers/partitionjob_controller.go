@@ -133,16 +133,19 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		numPodsToBeDeleted := numAvailableReplicas - partitionJob.Spec.Replicas
 		diff := partitionJob.Status.UpdatedReplicas - *partitionJob.Spec.Partitions
 
-		newUpdatedReplicas := partitionJob.Status.UpdatedReplicas
+		newRevisionReplicas := partitionJob.Status.UpdatedReplicas
+		currentRevisionReplicas := partitionJob.Status.CurrentReplicas
 
 		for i := 1; i <= int(numPodsToBeDeleted); i++ {
 			var dpod *corev1.Pod
 			if diff > 0 {
 				dpod = newRevisionPods[len(newRevisionPods)-i]
-				newUpdatedReplicas--
+				newRevisionReplicas--
 				diff--
 			} else {
 				dpod = oldRevisionPods[len(oldRevisionPods)-i]
+				currentRevisionReplicas--
+
 			}
 
 			if err = r.Delete(ctx, dpod); err != nil {
@@ -153,7 +156,9 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 
 		patch := client.MergeFrom(partitionJob.DeepCopy())
-		partitionJob.Status.UpdatedReplicas = newUpdatedReplicas
+		partitionJob.Status.UpdatedReplicas = newRevisionReplicas
+		partitionJob.Status.CurrentReplicas = currentRevisionReplicas
+		partitionJob.Status.AvailableReplicas = newRevisionReplicas + currentRevisionReplicas
 
 		if err := r.Status().Patch(ctx, partitionJob, patch); err != nil {
 			l.Error(err, "Failed to update PartitionJob status")
@@ -167,20 +172,22 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		l.Info("Scaling up pods", "Currently available", numAvailableReplicas, "Required replicas", partitionJob.Spec.Replicas)
 		diff := *partitionJob.Spec.Partitions - partitionJob.Status.UpdatedReplicas
 
-		newUpdatedReplicas := partitionJob.Status.UpdatedReplicas
+		newRevisionReplicas := partitionJob.Status.UpdatedReplicas
+		currentRevisionReplicas := partitionJob.Status.CurrentReplicas
 
 		var pod *corev1.Pod
 		if diff > 0 {
 			//create pod with new revision
 			template := utils.RawToTemplate(updatedRevision.Data.Raw)
 			pod = utils.CreateNewPod(partitionJob, template)
-			newUpdatedReplicas++
+			newRevisionReplicas++
 
 			utils.SetPodRevision(pod, updatedRevision.Name)
 		} else {
 			//create pod with old revision
 			template := utils.RawToTemplate(currentRevision.Data.Raw)
 			pod = utils.CreateNewPod(partitionJob, template)
+			currentRevisionReplicas++
 
 			utils.SetPodRevision(pod, currentRevision.Name)
 		}
@@ -195,14 +202,14 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			l.Error(err, "Failed to create pod", "pod.name", pod.Name)
 			return ctrl.Result{}, err
 		}
-		if diff > 0 {
 
-			patch := client.MergeFrom(partitionJob.DeepCopy())
-			partitionJob.Status.UpdatedReplicas = newUpdatedReplicas
-			if err := r.Status().Patch(ctx, partitionJob, patch); err != nil {
-				l.Error(err, "Failed to update PartitionJob status")
-				return ctrl.Result{}, err
-			}
+		patch := client.MergeFrom(partitionJob.DeepCopy())
+		partitionJob.Status.UpdatedReplicas = newRevisionReplicas
+		partitionJob.Status.CurrentReplicas = currentRevisionReplicas
+		partitionJob.Status.AvailableReplicas = newRevisionReplicas + currentRevisionReplicas
+		if err := r.Status().Patch(ctx, partitionJob, patch); err != nil {
+			l.Error(err, "Failed to update PartitionJob status")
+			return ctrl.Result{}, err
 		}
 
 		return ctrl.Result{}, nil
@@ -211,7 +218,7 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if currentRevision != updatedRevision && partitionJob.Status.UpdatedReplicas > *partitionJob.Spec.Partitions && *partitionJob.Spec.Partitions >= 0 {
 		l.Info("Scaling down new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
 		diff := partitionJob.Status.UpdatedReplicas - *partitionJob.Spec.Partitions
-		newUpdatedReplicas := partitionJob.Status.UpdatedReplicas
+		newRevisionReplicas := partitionJob.Status.UpdatedReplicas
 		dpods := newRevisionPods[:diff]
 		for _, dpod := range dpods {
 			err = r.Delete(ctx, dpod)
@@ -220,11 +227,13 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				return ctrl.Result{}, err
 			}
 
-			newUpdatedReplicas--
+			newRevisionReplicas--
+			numAvailableReplicas--
 		}
 
 		patch := client.MergeFrom(partitionJob.DeepCopy())
-		partitionJob.Status.UpdatedReplicas = newUpdatedReplicas
+		partitionJob.Status.UpdatedReplicas = newRevisionReplicas
+		partitionJob.Status.AvailableReplicas = numAvailableReplicas
 
 		if err := r.Status().Patch(ctx, partitionJob, patch); err != nil {
 			l.Error(err, "Failed to update PartitionJob status")
@@ -237,7 +246,8 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		l.Info("Scaling up new revision pods", "Currently available", partitionJob.Status.UpdatedReplicas, "Required replicas", partitionJob.Spec.Partitions)
 		diff := *partitionJob.Spec.Partitions - partitionJob.Status.UpdatedReplicas
 
-		newUpdatedReplicas := partitionJob.Status.UpdatedReplicas
+		newRevisionReplicas := partitionJob.Status.UpdatedReplicas
+		oldRevisionReplicas := partitionJob.Status.CurrentReplicas
 
 		dpods := oldRevisionPods[:diff]
 		for _, dpod := range dpods {
@@ -246,6 +256,8 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				l.Error(err, "Failed to delete pod", "pod.name", dpod.Name)
 				return ctrl.Result{}, err
 			}
+
+			oldRevisionReplicas--
 
 			// Define a new Pod object
 			template := utils.RawToTemplate(updatedRevision.Data.Raw)
@@ -263,12 +275,13 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				return ctrl.Result{}, err
 			}
 
-			newUpdatedReplicas++
+			newRevisionReplicas++
 
 		}
 
 		patch := client.MergeFrom(partitionJob.DeepCopy())
-		partitionJob.Status.UpdatedReplicas = newUpdatedReplicas
+		partitionJob.Status.UpdatedReplicas = newRevisionReplicas
+		partitionJob.Status.CurrentReplicas = oldRevisionReplicas
 		if err := r.Status().Patch(ctx, partitionJob, patch); err != nil {
 			l.Error(err, "Failed to update PartitionJob status")
 			return ctrl.Result{}, err
