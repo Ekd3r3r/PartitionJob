@@ -118,10 +118,15 @@ func GetAllRevisions(r client.Client, ctx context.Context, partitionJob *webappv
 
 				collisionCount++
 			}
+
+			return nil, collisionCount, err
 		}
 	}
 
-	updatedRevisions, _ := ListRevisions(r, ctx, partitionJob)
+	updatedRevisions, err := ListRevisions(r, ctx, partitionJob)
+	if err != nil {
+		return nil, collisionCount, err
+	}
 	history.SortControllerRevisions(updatedRevisions)
 
 	return updatedRevisions, collisionCount, nil
