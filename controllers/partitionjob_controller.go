@@ -71,7 +71,7 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	history.SortControllerRevisions(allRevisions)
 
 	allRevisions, collisonCount, err := utils.GetAllRevisions(r.Client, ctx, partitionJob, allRevisions)
-	if err != nil {
+	if len(allRevisions) < 1 || err != nil {
 		return ctrl.Result{}, err
 	}
 
