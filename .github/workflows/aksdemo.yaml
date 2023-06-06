@@ -34,6 +34,8 @@ jobs:
         with:
           resource-group: '${{ env.RESOURCE_GROUP }}' 
           cluster-name: '${{ env.CLUSTER_NAME }}'
+          admin: 'false'
+          use-kubelogin: 'true'
 
       - name: Set up Go
         uses: actions/setup-go@v2

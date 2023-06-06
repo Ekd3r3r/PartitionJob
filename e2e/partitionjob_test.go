@@ -26,7 +26,6 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
 )
 
 func TestPartitionJobs(t *testing.T) {
@@ -42,12 +41,7 @@ func TestPartitionJobs(t *testing.T) {
 	// BuildConfigFromFlags creates a Kubernetes REST client configuration
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig.Value.String())
 	if err != nil {
-		// creates the in-cluster config
-		config, err = rest.InClusterConfig()
-		if err != nil {
-			log.Fatalf("Error building kubeconfig: %v", err)
-		}
-
+		log.Fatalf("Error building kubeconfig: %v", err)
 	}
 
 	scheme := runtime.NewScheme()
