@@ -75,4 +75,4 @@ jobs:
 
       - name: Uninstall CRD and Controller
         run: |
-          helm uninstall partitionjob ./chart
+          helm uninstall partitionjob
