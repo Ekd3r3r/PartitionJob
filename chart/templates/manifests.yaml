@@ -4530,7 +4530,7 @@ metadata:
   name: partitionjob-proxy-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRolepartitionjob-controller-manager-cc58884f8-9gpgx
+  kind: ClusterRole
   name: partitionjob-proxy-role
 subjects:
 - kind: ServiceAccount
