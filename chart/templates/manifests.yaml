@@ -9,7 +9,7 @@ metadata:
     app.kubernetes.io/name: namespace
     app.kubernetes.io/part-of: partitionjob
     control-plane: controller-manager
-  name: partitionjob-system
+  name: {{ .Values.namespace }}
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -4354,7 +4354,7 @@ metadata:
     app.kubernetes.io/name: serviceaccount
     app.kubernetes.io/part-of: partitionjob
   name: partitionjob-controller-manager
-  namespace: partitionjob-system
+  namespace: {{ .Values.namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -4367,7 +4367,7 @@ metadata:
     app.kubernetes.io/name: role
     app.kubernetes.io/part-of: partitionjob
   name: partitionjob-leader-election-role
-  namespace: partitionjob-system
+  namespace: {{ .Values.namespace }}
 rules:
 - apiGroups:
   - ""
@@ -4487,7 +4487,7 @@ metadata:
     app.kubernetes.io/name: rolebinding
     app.kubernetes.io/part-of: partitionjob
   name: partitionjob-leader-election-rolebinding
-  namespace: partitionjob-system
+  namespace: {{ .Values.namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -4495,7 +4495,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: partitionjob-controller-manager
-  namespace: partitionjob-system
+  namespace: {{ .Values.namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -4515,7 +4515,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: partitionjob-controller-manager
-  namespace: partitionjob-system
+  namespace: {{ .Values.namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -4530,12 +4530,12 @@ metadata:
   name: partitionjob-proxy-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
+  kind: ClusterRolepartitionjob-controller-manager-cc58884f8-9gpgx
   name: partitionjob-proxy-role
 subjects:
 - kind: ServiceAccount
   name: partitionjob-controller-manager
-  namespace: partitionjob-system
+  namespace: {{ .Values.namespace }}
 ---
 apiVersion: v1
 kind: Service
@@ -4549,7 +4549,7 @@ metadata:
     app.kubernetes.io/part-of: partitionjob
     control-plane: controller-manager
   name: partitionjob-controller-manager-metrics-service
-  namespace: partitionjob-system
+  namespace: {{ .Values.namespace }}
 spec:
   ports:
   - name: https
@@ -4571,7 +4571,7 @@ metadata:
     app.kubernetes.io/part-of: partitionjob
     control-plane: controller-manager
   name: partitionjob-controller-manager
-  namespace: partitionjob-system
+  namespace: {{ .Values.namespace }}
 spec:
   replicas: 1
   selector:
