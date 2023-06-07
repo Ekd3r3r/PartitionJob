@@ -67,7 +67,7 @@ jobs:
 
       - name: Install CRD and Controller
         run: |
-          helm upgrade --install partitionjob ./chart
+          helm upgrade --install --wait partitionjob ./chart
 
       - name: Run E2E tests
         run: |
