@@ -191,11 +191,20 @@ func TestPartitionJobs(t *testing.T) {
 			}, func() error {
 				var allRevisions []*apps.ControllerRevision
 
-				allRevisions, _ = utils.ListRevisions(client, context.TODO(), partitionJob)
+				allRevisions, err = utils.ListRevisions(client, context.TODO(), partitionJob)
+				if err != nil {
+					t.Logf("Unable to obtain Revisions. Retrying")
+					return err
+				}
 
 				history.SortControllerRevisions(allRevisions)
 
-				allRevisions, _, _ = utils.GetAllRevisions(client, context.TODO(), partitionJob, allRevisions)
+				allRevisions, _, err = utils.GetAllRevisions(client, context.TODO(), partitionJob, allRevisions)
+
+				if err != nil {
+					t.Logf("Unable to obtain Revisions. Retrying")
+					return err
+				}
 
 				availableReplicas, _, _, err = utils.GetRevisionPods(client, context.Background(), partitionJob, allRevisions)
 				if err != nil {
@@ -224,11 +233,21 @@ func TestPartitionJobs(t *testing.T) {
 				}, func() error {
 					var allRevisions []*apps.ControllerRevision
 
-					allRevisions, _ = utils.ListRevisions(client, context.TODO(), partitionJob)
+					allRevisions, err = utils.ListRevisions(client, context.TODO(), partitionJob)
+
+					if err != nil {
+						t.Logf("Unable to obtain Revisions. Retrying")
+						return err
+					}
 
 					history.SortControllerRevisions(allRevisions)
 
 					allRevisions, _, _ = utils.GetAllRevisions(client, context.TODO(), partitionJob, allRevisions)
+
+					if err != nil {
+						t.Logf("Unable to obtain Revisions. Retrying")
+						return err
+					}
 
 					_, _, newRevisionPods, err = utils.GetRevisionPods(client, context.Background(), partitionJob, allRevisions)
 					actualPartitions = len(newRevisionPods)

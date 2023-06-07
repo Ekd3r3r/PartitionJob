@@ -74,7 +74,6 @@ func GetRevisionPods(c client.Client, ctx context.Context, partitionJob *webappv
 
 	oldRevisionPods := make([]*corev1.Pod, 0)
 	newRevisionPods := make([]*corev1.Pod, 0)
-	availablePods := make([]*corev1.Pod, 0)
 
 	for _, pod := range availableReplicas {
 
@@ -82,16 +81,19 @@ func GetRevisionPods(c client.Client, ctx context.Context, partitionJob *webappv
 
 		if currentRevision != nil && podRevision == currentRevision.Name {
 			oldRevisionPods = append(oldRevisionPods, pod)
-			availablePods = append(availablePods, pod)
+
 		} else if updatedRevision != nil && podRevision == updatedRevision.Name {
 			newRevisionPods = append(newRevisionPods, pod)
-			availablePods = append(availablePods, pod)
 		} else {
 			err = c.Delete(ctx, pod)
 			if err != nil {
 				log.FromContext(ctx).Error(err, "Failed to delete pod", "pod.name", pod.Name)
+				return nil, nil, nil, err
 			}
 		}
+
 	}
+	availablePods := append(oldRevisionPods, newRevisionPods...)
+
 	return availablePods, oldRevisionPods, newRevisionPods, nil
 }
