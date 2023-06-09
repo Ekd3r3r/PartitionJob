@@ -41,7 +41,14 @@ func TestPartitionJobs(t *testing.T) {
 	// BuildConfigFromFlags creates a Kubernetes REST client configuration
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig.Value.String())
 	if err != nil {
-		log.Fatalf("Error building kubeconfig: %v", err)
+		kubeconfig := os.Getenv("KUBECONFIG")
+
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+
+		if err != nil {
+			log.Fatalf("Error building kubeconfig: %v", err)
+		}
+
 	}
 
 	scheme := runtime.NewScheme()

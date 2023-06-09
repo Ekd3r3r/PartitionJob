@@ -1,0 +1,4 @@
+namespace: partitionjob-system
+image: 1d3r3r/partitionjob:latest
+
+    
