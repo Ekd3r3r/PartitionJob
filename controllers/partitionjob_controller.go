@@ -62,6 +62,12 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// on deleted requests.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	if !instance.ObjectMeta.DeletionTimestamp.IsZero() {
+		// Stop reconciliation as the item is being deleted
+		return ctrl.Result{}, nil
+	}
+
 	partitionJob := instance.DeepCopy()
 
 	currentRevision, updatedRevision, availableReplicas, oldRevisionPods, newRevisionPods, err := utils.GetRevisionsPods(r.Client, ctx, partitionJob)
@@ -267,7 +273,7 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 func (r *PartitionJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&webappv1.PartitionJob{}).
-		Owns(&corev1.Pod{}).
 		Owns(&apps.ControllerRevision{}).
+		Owns(&corev1.Pod{}).
 		Complete(r)
 }
