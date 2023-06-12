@@ -57,7 +57,7 @@ func GetRevisionsPods(c client.Client, ctx context.Context, partitionJob *webapp
 
 	allRevisions, collisonCount, err := GetAllRevisions(c, ctx, partitionJob, allRevisions)
 	revisionCount := len(allRevisions)
-	if err != nil || revisionCount == 0 {
+	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
 

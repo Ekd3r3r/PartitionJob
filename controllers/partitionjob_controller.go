@@ -22,7 +22,6 @@ import (
 
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	webappv1 "my.domain/partitionJob/api/v1"
 	utils "my.domain/partitionJob/utils"
@@ -56,10 +55,12 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	instance, err := utils.GetPartitionJob(r.Client, ctx, req.NamespacedName)
 	if err != nil {
-		if errors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
+		l.Error(err, "Failed to get PartitionJob")
+
+		// we'll ignore not-found errors, since they can't be fixed by an immediate
+		// requeue (we'll need to wait for a new notification), and we can get them
+		// on deleted requests.
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	partitionJob := instance.DeepCopy()
 
@@ -264,14 +265,9 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PartitionJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := ctrl.NewControllerManagedBy(mgr).
+	return ctrl.NewControllerManagedBy(mgr).
 		For(&webappv1.PartitionJob{}).
 		Owns(&corev1.Pod{}).
-		Complete(r); err != nil {
-		return err
-	}
-
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&apps.ControllerRevision{}).
+		Owns(&apps.ControllerRevision{}).
 		Complete(r)
 }
