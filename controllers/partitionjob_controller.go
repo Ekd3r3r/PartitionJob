@@ -24,7 +24,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/kubernetes/pkg/controller/history"
 	webappv1 "my.domain/partitionJob/api/v1"
 	utils "my.domain/partitionJob/utils"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -55,7 +54,7 @@ type PartitionJobReconciler struct {
 func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 
-	instance, err := utils.GetPartitionJob(r.Client, ctx, req)
+	instance, err := utils.GetPartitionJob(r.Client, ctx, req.NamespacedName)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -64,38 +63,7 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 	partitionJob := instance.DeepCopy()
 
-	allRevisions, err := utils.ListRevisions(r.Client, ctx, partitionJob)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	history.SortControllerRevisions(allRevisions)
-
-	allRevisions, collisonCount, err := utils.GetAllRevisions(r.Client, ctx, partitionJob, allRevisions)
-	revisionCount := len(allRevisions)
-	if err != nil || revisionCount == 0 {
-		return ctrl.Result{}, err
-	}
-
-	var currentRevision, updatedRevision *apps.ControllerRevision
-
-	if revisionCount > 0 && allRevisions[revisionCount-1] != nil {
-		//revision is sorted in ascending order, so the updated revision will be the last revision
-		updatedRevision = allRevisions[revisionCount-1]
-	}
-
-	if revisionCount > 1 && allRevisions[revisionCount-2] != nil {
-		//revision is sorted in ascending order, so the current revision will be the second to last revision
-		currentRevision = allRevisions[revisionCount-2]
-	}
-
-	// if currentRevision is not set because it is the first pass, set it equal to updatedRevision
-	if currentRevision == nil {
-		currentRevision = updatedRevision
-	}
-
-	l.Info("Revision Info", "current revision:", currentRevision, "updated revision:", updatedRevision, "collision count:", collisonCount)
-
-	availableReplicas, oldRevisionPods, newRevisionPods, err := utils.GetRevisionPods(r.Client, ctx, partitionJob, allRevisions)
+	currentRevision, updatedRevision, availableReplicas, oldRevisionPods, newRevisionPods, err := utils.GetRevisionsPods(r.Client, ctx, partitionJob)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

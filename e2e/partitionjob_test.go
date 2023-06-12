@@ -11,16 +11,13 @@ import (
 	"testing"
 	"time"
 
-	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/retry"
-	"k8s.io/kubernetes/pkg/controller/history"
 	webappv1 "my.domain/partitionJob/api/v1"
 	utils "my.domain/partitionJob/utils"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -32,14 +29,18 @@ func TestPartitionJobs(t *testing.T) {
 
 	kubeconfig := flag.Lookup("kubeconfig")
 
+	var kubeConfigValue string
+
 	if kubeconfig == nil {
-		flag.String("kubeconfig", filepath.Join(os.Getenv("HOME"), ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+		kubeConfigValue = *flag.String("kubeconfig", filepath.Join(os.Getenv("HOME"), ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+		flag.Parse()
 	} else {
 		kubeconfig.Value.Set(filepath.Join(os.Getenv("HOME"), ".kube", "config"))
+		kubeConfigValue = kubeconfig.Value.String()
 	}
 
 	// BuildConfigFromFlags creates a Kubernetes REST client configuration
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig.Value.String())
+	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigValue)
 	if err != nil {
 		kubeconfig := os.Getenv("KUBECONFIG")
 
@@ -110,8 +111,10 @@ func TestPartitionJobs(t *testing.T) {
 			t.Fatal(string(out))
 		}
 
+		//If we want to test partitions, initially deploy PartiitionJob with a different pod template
+		//so that we can have two revisions for testing
 		if tc.testPartitions {
-			cmd = kubectl("apply", "-f", "fixtures/partitionjob_deploy_pod_template_change.yaml")
+			cmd = kubectl("apply", "-f", "fixtures/partitionjob_pod_template_change.yaml")
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatal(string(out))
 			}
@@ -157,7 +160,7 @@ func TestPartitionJobs(t *testing.T) {
 			func(err error) bool {
 				return true
 			}, func() error {
-				partitionJob, err = utils.GetPartitionJob(client, context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "partitionjob-sample", Namespace: "partitionjob-test"}})
+				partitionJob, err = utils.GetPartitionJob(client, context.Background(), types.NamespacedName{Name: "partitionjob-sample", Namespace: "partitionjob-test"})
 				if err != nil {
 					t.Logf("Unable to obtain PartitionJob resource %s. Retrying", partitionJob.Name)
 					return err
@@ -196,24 +199,8 @@ func TestPartitionJobs(t *testing.T) {
 			func(err error) bool {
 				return true
 			}, func() error {
-				var allRevisions []*apps.ControllerRevision
 
-				allRevisions, err = utils.ListRevisions(client, context.TODO(), partitionJob)
-				if err != nil {
-					t.Logf("Unable to obtain Revisions. Retrying")
-					return err
-				}
-
-				history.SortControllerRevisions(allRevisions)
-
-				allRevisions, _, err = utils.GetAllRevisions(client, context.TODO(), partitionJob, allRevisions)
-
-				if err != nil {
-					t.Logf("Unable to obtain Revisions. Retrying")
-					return err
-				}
-
-				availableReplicas, _, _, err = utils.GetRevisionPods(client, context.Background(), partitionJob, allRevisions)
+				_, _, availableReplicas, _, _, err = utils.GetRevisionsPods(client, context.Background(), partitionJob)
 				if err != nil {
 					t.Logf("Unable to obtain Available Replicas. Retrying")
 					return err
@@ -238,25 +225,8 @@ func TestPartitionJobs(t *testing.T) {
 				func(err error) bool {
 					return true
 				}, func() error {
-					var allRevisions []*apps.ControllerRevision
 
-					allRevisions, err = utils.ListRevisions(client, context.TODO(), partitionJob)
-
-					if err != nil {
-						t.Logf("Unable to obtain Revisions. Retrying")
-						return err
-					}
-
-					history.SortControllerRevisions(allRevisions)
-
-					allRevisions, _, _ = utils.GetAllRevisions(client, context.TODO(), partitionJob, allRevisions)
-
-					if err != nil {
-						t.Logf("Unable to obtain Revisions. Retrying")
-						return err
-					}
-
-					_, _, newRevisionPods, err = utils.GetRevisionPods(client, context.Background(), partitionJob, allRevisions)
+					_, _, _, _, newRevisionPods, err = utils.GetRevisionsPods(client, context.Background(), partitionJob)
 					actualPartitions = len(newRevisionPods)
 
 					if err != nil {
@@ -275,9 +245,6 @@ func TestPartitionJobs(t *testing.T) {
 				t.Fatalf("Expected partitions %d, got %d", expectedPartitions, actualPartitions)
 			}
 		}
-
-		//Allow reconciler to finish executing
-		time.Sleep(15 * time.Second)
 
 		t.Log("Cleaning up PartitionJob")
 
