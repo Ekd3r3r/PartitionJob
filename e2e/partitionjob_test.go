@@ -246,6 +246,9 @@ func TestPartitionJobs(t *testing.T) {
 			}
 		}
 
+		//Allow reconciler to finish executing
+		time.Sleep(15 * time.Second)
+
 		t.Log("Cleaning up PartitionJob")
 
 		cmd = kubectl("delete", "partitionjob", "partitionjob-sample", "-n", "partitionjob-test", "--ignore-not-found")
