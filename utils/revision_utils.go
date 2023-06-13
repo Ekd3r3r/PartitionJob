@@ -42,6 +42,19 @@ func GetNextRevision(revisions []*apps.ControllerRevision) int64 {
 	return revisions[count-1].Revision + 1
 }
 
+// Deletes all controller revisions of PartitionJob resource
+func DeleteRevisions(r client.Client, ctx context.Context, partitionJob *webappv1.PartitionJob) error {
+	labelsToMatch := partitionJob.Spec.Selector.MatchLabels
+	labelSelector := labels.SelectorFromSet(labelsToMatch)
+
+	deleteAllOptions := &client.DeleteAllOfOptions{ListOptions: client.ListOptions{Namespace: partitionJob.Namespace, LabelSelector: labelSelector}, DeleteOptions: client.DeleteOptions{}}
+
+	if err := r.DeleteAllOf(ctx, &apps.ControllerRevision{}, deleteAllOptions); err != nil {
+		return err
+	}
+	return nil
+}
+
 // returns an array of ControllerRevisions with revisions of PartitionJob resource.
 func ListRevisions(r client.Client, ctx context.Context, partitionJob *webappv1.PartitionJob) ([]*apps.ControllerRevision, error) {
 	revisionList := &apps.ControllerRevisionList{}

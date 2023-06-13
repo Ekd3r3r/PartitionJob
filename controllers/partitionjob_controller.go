@@ -22,9 +22,7 @@ import (
 
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/kubernetes/pkg/controller/history"
 	webappv1 "my.domain/partitionJob/api/v1"
 	utils "my.domain/partitionJob/utils"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -55,47 +53,53 @@ type PartitionJobReconciler struct {
 func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 
-	instance, err := utils.GetPartitionJob(r.Client, ctx, req)
+	instance, err := utils.GetPartitionJob(r.Client, ctx, req.NamespacedName)
 	if err != nil {
-		if errors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
+		l.Error(err, "Failed to get PartitionJob")
+
+		// we'll ignore not-found errors, since they can't be fixed by an immediate
+		// requeue (we'll need to wait for a new notification), and we can get them
+		// on deleted requests.
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
 	partitionJob := instance.DeepCopy()
 
-	allRevisions, err := utils.ListRevisions(r.Client, ctx, partitionJob)
-	if err != nil {
-		return ctrl.Result{}, err
+	finalizerName := "webapp.my.domain.partitionjob/finalizer"
+
+	// examine DeletionTimestamp to determine if object is under deletion
+	if partitionJob.ObjectMeta.DeletionTimestamp.IsZero() {
+		// The object is not being deleted, so if it does not have our finalizer,
+		// then lets add the finalizer and update the object. This is equivalent
+		// registering our finalizer.
+		if !controllerutil.ContainsFinalizer(partitionJob, finalizerName) {
+			controllerutil.AddFinalizer(partitionJob, finalizerName)
+			if err := r.Update(ctx, partitionJob); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	} else {
+		// The object is being deleted
+		if controllerutil.ContainsFinalizer(partitionJob, finalizerName) {
+			// our finalizer is present, so lets handle any external dependency
+			if err := r.deleteExternalResources(ctx, partitionJob); err != nil {
+				// if fail to delete the external dependency here, return with error
+				// so that it can be retried
+				return ctrl.Result{}, err
+			}
+
+			// remove our finalizer from the list and update it.
+			controllerutil.RemoveFinalizer(partitionJob, finalizerName)
+			if err := r.Update(ctx, partitionJob); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
+		// Stop reconciliation as the item is being deleted
+		return ctrl.Result{}, nil
 	}
-	history.SortControllerRevisions(allRevisions)
 
-	allRevisions, collisonCount, err := utils.GetAllRevisions(r.Client, ctx, partitionJob, allRevisions)
-	revisionCount := len(allRevisions)
-	if err != nil || revisionCount == 0 {
-		return ctrl.Result{}, err
-	}
-
-	var currentRevision, updatedRevision *apps.ControllerRevision
-
-	if revisionCount > 0 && allRevisions[revisionCount-1] != nil {
-		//revision is sorted in ascending order, so the updated revision will be the last revision
-		updatedRevision = allRevisions[revisionCount-1]
-	}
-
-	if revisionCount > 1 && allRevisions[revisionCount-2] != nil {
-		//revision is sorted in ascending order, so the current revision will be the second to last revision
-		currentRevision = allRevisions[revisionCount-2]
-	}
-
-	// if currentRevision is not set because it is the first pass, set it equal to updatedRevision
-	if currentRevision == nil {
-		currentRevision = updatedRevision
-	}
-
-	l.Info("Revision Info", "current revision:", currentRevision, "updated revision:", updatedRevision, "collision count:", collisonCount)
-
-	availableReplicas, oldRevisionPods, newRevisionPods, err := utils.GetRevisionPods(r.Client, ctx, partitionJob, allRevisions)
+	currentRevision, updatedRevision, availableReplicas, oldRevisionPods, newRevisionPods, err := utils.GetRevisionsPods(r.Client, ctx, partitionJob)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -296,14 +300,18 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PartitionJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := ctrl.NewControllerManagedBy(mgr).
+	return ctrl.NewControllerManagedBy(mgr).
 		For(&webappv1.PartitionJob{}).
+		Owns(&apps.ControllerRevision{}).
 		Owns(&corev1.Pod{}).
-		Complete(r); err != nil {
+		Complete(r)
+}
+
+func (r *PartitionJobReconciler) deleteExternalResources(ctx context.Context, partitionJob *webappv1.PartitionJob) error {
+
+	err := utils.DeleteRevisions(r.Client, ctx, partitionJob)
+	if err != nil {
 		return err
 	}
-
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&apps.ControllerRevision{}).
-		Complete(r)
+	return nil
 }
