@@ -125,6 +125,32 @@ func TestPartitionJobs(t *testing.T) {
 			}
 		}
 
+		var partitionJob *webappv1.PartitionJob
+
+		setupBackoff := wait.Backoff{
+			Steps:    50,
+			Duration: time.Second * 10,
+			Factor:   0,
+			Jitter:   0.1,
+		}
+
+		err = retry.OnError(setupBackoff,
+			func(err error) bool {
+				return true
+			}, func() error {
+				partitionJob, err = utils.GetPartitionJob(client, context.Background(), types.NamespacedName{Name: "partitionjob-sample", Namespace: "partitionjob-test"})
+				if err != nil {
+					t.Logf("Unable to obtain PartitionJob resource %s. Retrying", partitionJob.Name)
+					return err
+				}
+				t.Logf("PartitionJob %s is successfully created", partitionJob.Name)
+				return nil
+			})
+
+		if err != nil {
+			t.Fatalf("Cannot create PartitionJob %s ", partitionJob.Name)
+		}
+
 		t.Log(tc.description)
 
 		cmd = kubectl("apply", "-f", tc.fixtureFilePath)
@@ -146,15 +172,6 @@ func TestPartitionJobs(t *testing.T) {
 		t.Log("Expected replicas: ", expectedReplicas)
 
 		var expectedPartitions int
-
-		var partitionJob *webappv1.PartitionJob
-
-		setupBackoff := wait.Backoff{
-			Steps:    50,
-			Duration: time.Second * 10,
-			Factor:   0,
-			Jitter:   0.1,
-		}
 
 		err = retry.OnError(setupBackoff,
 			func(err error) bool {
@@ -245,9 +262,6 @@ func TestPartitionJobs(t *testing.T) {
 				t.Fatalf("Expected partitions %d, got %d", expectedPartitions, actualPartitions)
 			}
 		}
-
-		//Allow reconciler to finish executing
-		time.Sleep(5 * time.Second)
 
 		t.Log("Cleaning up PartitionJob")
 
