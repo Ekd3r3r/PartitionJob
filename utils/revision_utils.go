@@ -10,6 +10,7 @@ import (
 	"k8s.io/kubernetes/pkg/controller/history"
 	webappv1 "my.domain/partitionJob/api/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 // creates a new controller revision
@@ -49,10 +50,29 @@ func DeleteRevisions(r client.Client, ctx context.Context, partitionJob *webappv
 
 	deleteAllOptions := &client.DeleteAllOfOptions{ListOptions: client.ListOptions{Namespace: partitionJob.Namespace, LabelSelector: labelSelector}, DeleteOptions: client.DeleteOptions{}}
 
-	if err := r.DeleteAllOf(ctx, &apps.ControllerRevision{}, deleteAllOptions); err != nil {
+	revisionList := &apps.ControllerRevisionList{}
+
+	listOptions := &client.ListOptions{Namespace: partitionJob.Namespace, LabelSelector: labelSelector}
+
+	if err := r.List(ctx, revisionList, listOptions); err != nil {
 		return err
 	}
+	finalizerName := "webapp.my.domain.partitionjob/finalizer"
+	for index := range revisionList.Items {
+
+		controllerutil.RemoveFinalizer(&revisionList.Items[index], finalizerName)
+		if err := r.Update(ctx, &revisionList.Items[index]); err != nil {
+			return err
+		}
+
+		if err := r.Delete(ctx, &revisionList.Items[index], deleteAllOptions); err != nil {
+			return err
+		}
+
+	}
+
 	return nil
+
 }
 
 // returns an array of ControllerRevisions with revisions of PartitionJob resource.
@@ -134,6 +154,16 @@ func GetAllRevisions(r client.Client, ctx context.Context, partitionJob *webappv
 
 			return nil, collisionCount, err
 		}
+
+		finalizerName := "webapp.my.domain.partitionjob/finalizer"
+
+		if !controllerutil.ContainsFinalizer(clone, finalizerName) {
+			controllerutil.AddFinalizer(clone, finalizerName)
+			if err := r.Update(ctx, clone); err != nil {
+				return nil, collisionCount, err
+			}
+		}
+
 	}
 
 	updatedRevisions, err := ListRevisions(r, ctx, partitionJob)
