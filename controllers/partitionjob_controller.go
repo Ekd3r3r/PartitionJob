@@ -63,12 +63,41 @@ func (r *PartitionJobReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if !instance.ObjectMeta.DeletionTimestamp.IsZero() {
+	partitionJob := instance.DeepCopy()
+
+	finalizerName := "webapp.my.domain.partitionjob/finalizer"
+
+	// examine DeletionTimestamp to determine if object is under deletion
+	if partitionJob.ObjectMeta.DeletionTimestamp.IsZero() {
+		// The object is not being deleted, so if it does not have our finalizer,
+		// then lets add the finalizer and update the object. This is equivalent
+		// registering our finalizer.
+		if !controllerutil.ContainsFinalizer(partitionJob, finalizerName) {
+			controllerutil.AddFinalizer(partitionJob, finalizerName)
+			if err := r.Update(ctx, partitionJob); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	} else {
+		// The object is being deleted
+		if controllerutil.ContainsFinalizer(partitionJob, finalizerName) {
+			// our finalizer is present, so lets handle any external dependency
+			if err := r.deleteExternalResources(ctx, partitionJob); err != nil {
+				// if fail to delete the external dependency here, return with error
+				// so that it can be retried
+				return ctrl.Result{}, err
+			}
+
+			// remove our finalizer from the list and update it.
+			controllerutil.RemoveFinalizer(partitionJob, finalizerName)
+			if err := r.Update(ctx, partitionJob); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
 		// Stop reconciliation as the item is being deleted
 		return ctrl.Result{}, nil
 	}
-
-	partitionJob := instance.DeepCopy()
 
 	currentRevision, updatedRevision, availableReplicas, oldRevisionPods, newRevisionPods, err := utils.GetRevisionsPods(r.Client, ctx, partitionJob)
 	if err != nil {
@@ -276,4 +305,13 @@ func (r *PartitionJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&apps.ControllerRevision{}).
 		Owns(&corev1.Pod{}).
 		Complete(r)
+}
+
+func (r *PartitionJobReconciler) deleteExternalResources(ctx context.Context, partitionJob *webappv1.PartitionJob) error {
+
+	err := utils.DeleteRevisions(r.Client, ctx, partitionJob)
+	if err != nil {
+		return err
+	}
+	return nil
 }

@@ -182,7 +182,7 @@ func TestPartitionJobs(t *testing.T) {
 					t.Logf("Unable to obtain PartitionJob resource %s. Retrying", partitionJob.Name)
 					return err
 				}
-				t.Logf("PartitionJob %s is successfully created", partitionJob.Name)
+				t.Logf("PartitionJob %s is successfully updated", partitionJob.Name)
 				return nil
 			})
 
