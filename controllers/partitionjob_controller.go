@@ -309,7 +309,7 @@ func (r *PartitionJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 func (r *PartitionJobReconciler) deleteExternalResources(ctx context.Context, partitionJob *webappv1.PartitionJob) error {
 
-	err := utils.DeleteRevisions(r.Client, ctx, partitionJob)
+	err := utils.RemoveRevisionFinalizers(r.Client, ctx, partitionJob)
 	if err != nil {
 		return err
 	}
