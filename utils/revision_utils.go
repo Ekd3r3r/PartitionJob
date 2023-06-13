@@ -43,12 +43,10 @@ func GetNextRevision(revisions []*apps.ControllerRevision) int64 {
 	return revisions[count-1].Revision + 1
 }
 
-// Deletes all controller revisions of PartitionJob resource
-func DeleteRevisions(r client.Client, ctx context.Context, partitionJob *webappv1.PartitionJob) error {
+// Removes all controller revision finalizers of PartitionJob resource so that they can be deleted
+func RemoveRevisionFinalizers(r client.Client, ctx context.Context, partitionJob *webappv1.PartitionJob) error {
 	labelsToMatch := partitionJob.Spec.Selector.MatchLabels
 	labelSelector := labels.SelectorFromSet(labelsToMatch)
-
-	deleteAllOptions := &client.DeleteAllOfOptions{ListOptions: client.ListOptions{Namespace: partitionJob.Namespace, LabelSelector: labelSelector}, DeleteOptions: client.DeleteOptions{}}
 
 	revisionList := &apps.ControllerRevisionList{}
 
@@ -64,11 +62,6 @@ func DeleteRevisions(r client.Client, ctx context.Context, partitionJob *webappv
 		if err := r.Update(ctx, &revisionList.Items[index]); err != nil {
 			return err
 		}
-
-		if err := r.Delete(ctx, &revisionList.Items[index], deleteAllOptions); err != nil {
-			return err
-		}
-
 	}
 
 	return nil
@@ -138,6 +131,12 @@ func GetAllRevisions(r client.Client, ctx context.Context, partitionJob *webappv
 			}
 		}
 
+		finalizerName := "webapp.my.domain.partitionjob/finalizer"
+
+		if !controllerutil.ContainsFinalizer(clone, finalizerName) {
+			controllerutil.AddFinalizer(clone, finalizerName)
+		}
+
 		if err := r.Create(ctx, clone); err != nil {
 			if errors.IsAlreadyExists(err) {
 				var cloneNamespacedName types.NamespacedName = types.NamespacedName{
@@ -153,15 +152,6 @@ func GetAllRevisions(r client.Client, ctx context.Context, partitionJob *webappv
 			}
 
 			return nil, collisionCount, err
-		}
-
-		finalizerName := "webapp.my.domain.partitionjob/finalizer"
-
-		if !controllerutil.ContainsFinalizer(clone, finalizerName) {
-			controllerutil.AddFinalizer(clone, finalizerName)
-			if err := r.Update(ctx, clone); err != nil {
-				return nil, collisionCount, err
-			}
 		}
 
 	}
