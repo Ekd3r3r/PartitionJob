@@ -173,23 +173,6 @@ func TestPartitionJobs(t *testing.T) {
 
 		var expectedPartitions int
 
-		err = retry.OnError(setupBackoff,
-			func(err error) bool {
-				return true
-			}, func() error {
-				partitionJob, err = utils.GetPartitionJob(client, context.Background(), types.NamespacedName{Name: "partitionjob-sample", Namespace: "partitionjob-test"})
-				if err != nil {
-					t.Logf("Unable to obtain PartitionJob resource %s. Retrying", partitionJob.Name)
-					return err
-				}
-				t.Logf("PartitionJob %s is successfully updated", partitionJob.Name)
-				return nil
-			})
-
-		if err != nil {
-			t.Fatalf("Cannot create PartitionJob %s ", partitionJob.Name)
-		}
-
 		if tc.testPartitions {
 			cmd = kubectl("get", "partitionjob", "partitionjob-sample", "--namespace=partitionjob-test", "-o", "go-template={{.spec.partitions}}")
 			out, err = cmd.CombinedOutput()
@@ -217,6 +200,12 @@ func TestPartitionJobs(t *testing.T) {
 				return true
 			}, func() error {
 
+				partitionJob, err = utils.GetPartitionJob(client, context.Background(), types.NamespacedName{Name: "partitionjob-sample", Namespace: "partitionjob-test"})
+				if err != nil {
+					t.Logf("Unable to obtain PartitionJob resource %s. Retrying", partitionJob.Name)
+					return err
+				}
+
 				_, _, availableReplicas, _, _, err = utils.GetRevisionsPods(client, context.Background(), partitionJob)
 				if err != nil {
 					t.Logf("Unable to obtain Available Replicas. Retrying")
@@ -243,6 +232,11 @@ func TestPartitionJobs(t *testing.T) {
 					return true
 				}, func() error {
 
+					partitionJob, err = utils.GetPartitionJob(client, context.Background(), types.NamespacedName{Name: "partitionjob-sample", Namespace: "partitionjob-test"})
+					if err != nil {
+						t.Logf("Unable to obtain PartitionJob resource %s. Retrying", partitionJob.Name)
+						return err
+					}
 					_, _, _, _, newRevisionPods, err = utils.GetRevisionsPods(client, context.Background(), partitionJob)
 					actualPartitions = len(newRevisionPods)
 
